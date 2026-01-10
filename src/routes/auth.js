@@ -36,12 +36,37 @@ router.get('/google/callback',
       // Set secure httpOnly cookies
       jwtService.setTokenCookies(res, accessToken, refreshToken);
       
+      // Determine redirect URL based on request origin or query parameter
+      let redirectUrl = process.env.FRONTEND_URL;
+      
+      // Check if request came from localhost (development)
+      const origin = req.get('Origin') || req.get('Referer');
+      if (origin && origin.includes('localhost:3000')) {
+        redirectUrl = 'http://localhost:3000';
+      }
+      
+      // Allow override via query parameter for development
+      if (req.query.redirect_to === 'localhost') {
+        redirectUrl = 'http://localhost:3000';
+      }
+      
       // Redirect to frontend with success
-      res.redirect(`${process.env.FRONTEND_URL}/?login=success`);
+      res.redirect(`${redirectUrl}/?login=success`);
       
     } catch (error) {
       console.error('OAuth callback error:', error);
-      res.redirect(`${process.env.FRONTEND_URL}/login?error=server_error`);
+      
+      // Use same logic for error redirects
+      let redirectUrl = process.env.FRONTEND_URL;
+      const origin = req.get('Origin') || req.get('Referer');
+      if (origin && origin.includes('localhost:3000')) {
+        redirectUrl = 'http://localhost:3000';
+      }
+      if (req.query.redirect_to === 'localhost') {
+        redirectUrl = 'http://localhost:3000';
+      }
+      
+      res.redirect(`${redirectUrl}/login?error=server_error`);
     }
   }
 );

@@ -201,8 +201,17 @@ router.get('/download/*', async (req, res, next) => {
     const downloadUrl = await mediaService.generatePresignedDownloadUrl(objectKey);
 
     // Set CORS headers before redirecting
+    const allowedOrigins = [
+      process.env.FRONTEND_URL || 'https://www.yodeco.duckdns.org',
+      'http://localhost:3000',
+      'https://localhost:3000'
+    ];
+    
+    const origin = req.get('Origin');
+    const allowOrigin = allowedOrigins.includes(origin) ? origin : allowedOrigins[0];
+    
     res.set({
-      'Access-Control-Allow-Origin': process.env.FRONTEND_URL || 'http://localhost:3000',
+      'Access-Control-Allow-Origin': allowOrigin,
       'Access-Control-Allow-Methods': 'GET',
       'Access-Control-Allow-Headers': 'Content-Type',
       'Cross-Origin-Resource-Policy': 'cross-origin'
