@@ -78,14 +78,14 @@ router.get('/categories', async (req, res) => {
       const awardsPopulate = {
         path: 'awards',
         match: { isActive: true },
-        select: 'title criteria isActive'
+        select: 'title criteria isActive allowPublicNomination nominationStartDate nominationEndDate votingStartDate votingEndDate'
       };
       
       // Add nominees to awards if requested
       if (includeNominees) {
         awardsPopulate.populate = {
           path: 'nominees',
-          match: { isActive: true },
+          match: { isActive: true, approvalStatus: 'approved' },
           select: 'name bio imageUrl displayOrder',
           options: { sort: { displayOrder: 1, name: 1 } }
         };
@@ -144,9 +144,10 @@ router.get('/categories/:id', async (req, res) => {
       .populate({
         path: 'awards',
         match: { isActive: true },
+        select: 'title criteria isActive allowPublicNomination nominationStartDate nominationEndDate votingStartDate votingEndDate',
         populate: {
           path: 'nominees',
-          match: { isActive: true },
+          match: { isActive: true, approvalStatus: 'approved' },
           select: 'name bio imageUrl displayOrder'
         }
       });
@@ -500,7 +501,18 @@ router.post('/awards',
   validate(schemas.awardCreation),
   async (req, res) => {
     try {
-      const { title, criteria, categoryId, imageUrl, votingStartDate, votingEndDate, isActive } = req.body;
+      const { 
+        title, 
+        criteria, 
+        categoryId, 
+        imageUrl, 
+        votingStartDate, 
+        votingEndDate, 
+        isActive,
+        allowPublicNomination,
+        nominationStartDate,
+        nominationEndDate
+      } = req.body;
       
       // Verify category exists
       const category = await Category.findById(categoryId);
@@ -568,6 +580,9 @@ router.post('/awards',
         votingStartDate,
         votingEndDate,
         isActive,
+        allowPublicNomination: allowPublicNomination || false,
+        nominationStartDate,
+        nominationEndDate,
         createdBy: req.user._id
       });
       
@@ -775,13 +790,22 @@ router.get('/nominees', async (req, res) => {
     const { page = 1, limit = 10, awardId, includeInactive = false } = req.query;
     const skip = (page - 1) * limit;
     
-    const filter = includeInactive ? {} : { isActive: true };
+    // Only show approved nominees to public
+    const filter = { 
+      approvalStatus: 'approved'
+    };
+    
+    if (!includeInactive) {
+      filter.isActive = true;
+    }
+    
     if (awardId) {
       filter.awardId = awardId;
     }
     
     const nominees = await Nominee.find(filter)
       .populate('createdBy', 'name email')
+      .populate('nominatedBy', 'name email')
       .populate({
         path: 'award',
         select: 'title criteria',
@@ -882,6 +906,7 @@ router.get('/nominees/:id', async (req, res) => {
 });
 
 // POST /api/content/nominees - Create nominee (panelist only)
+// POST /api/content/nominees - Create nominee (panelist only)
 router.post('/nominees',
   contentIdempotency,
   authenticate,
@@ -898,6 +923,25 @@ router.post('/nominees',
           error: {
             code: 'AWARD_NOT_FOUND',
             message: 'Award not found',
+            retryable: false
+          }
+        });
+      }
+      
+      // Check for existing nomination
+      const existingNomination = await Nominee.hasExistingNomination(awardId, name);
+      if (existingNomination) {
+        return res.status(409).json({
+          error: {
+            code: 'DUPLICATE_NOMINATION',
+            message: 'A nominee with this name already exists for this award',
+            details: {
+              existingNominee: {
+                id: existingNomination._id,
+                name: existingNomination.name,
+                approvalStatus: existingNomination.approvalStatus
+              }
+            },
             retryable: false
           }
         });
@@ -955,12 +999,16 @@ router.post('/nominees',
         awardId,
         imageUrl,
         displayOrder: displayOrder || 0,
-        createdBy: req.user._id
+        createdBy: req.user._id,
+        nominatedBy: req.user._id,
+        isPublicNomination: false,
+        approvalStatus: 'approved'
       });
       
       await nominee.save();
       await nominee.populate([
         { path: 'createdBy', select: 'name email' },
+        { path: 'nominatedBy', select: 'name email' },
         { 
           path: 'award', 
           select: 'title criteria',
@@ -984,10 +1032,158 @@ router.post('/nominees',
       res.status(201).json({ nominee });
     } catch (error) {
       console.error('Error creating nominee:', error);
+      
+      // Handle duplicate key error
+      if (error.code === 11000) {
+        return res.status(409).json({
+          error: {
+            code: 'DUPLICATE_NOMINATION',
+            message: 'A nominee with this name already exists for this award',
+            retryable: false
+          }
+        });
+      }
+      
       res.status(500).json({
         error: {
           code: 'CREATE_NOMINEE_ERROR',
           message: 'Failed to create nominee',
+          retryable: true
+        }
+      });
+    }
+  }
+);
+
+// POST /api/content/nominations - Public nomination endpoint (users can nominate)
+router.post('/nominations',
+  contentIdempotency,
+  authenticate,
+  requirePermission('nomination:create'),
+  validate(schemas.publicNomination),
+  async (req, res) => {
+    try {
+      const { name, bio, awardId, imageUrl } = req.body;
+      
+      // Verify award exists
+      const award = await Award.findById(awardId);
+      if (!award) {
+        return res.status(404).json({
+          error: {
+            code: 'AWARD_NOT_FOUND',
+            message: 'Award not found',
+            retryable: false
+          }
+        });
+      }
+      
+      // Check if public nomination is allowed for this award
+      const nominationStatus = award.isPublicNominationOpen();
+      if (!nominationStatus.allowed) {
+        return res.status(403).json({
+          error: {
+            code: 'NOMINATION_NOT_ALLOWED',
+            message: nominationStatus.reason,
+            details: {
+              startDate: nominationStatus.startDate,
+              endDate: nominationStatus.endDate
+            },
+            retryable: false
+          }
+        });
+      }
+      
+      // Check for existing nomination
+      const existingNomination = await Nominee.hasExistingNomination(awardId, name);
+      if (existingNomination) {
+        return res.status(409).json({
+          error: {
+            code: 'DUPLICATE_NOMINATION',
+            message: 'This person has already been nominated for this award',
+            details: {
+              existingNominee: {
+                id: existingNomination._id,
+                name: existingNomination.name,
+                approvalStatus: existingNomination.approvalStatus,
+                nominatedBy: existingNomination.nominatedBy
+              }
+            },
+            retryable: false
+          }
+        });
+      }
+      
+      // Validate image exists and format if provided
+      if (imageUrl) {
+        const imageExists = await validateImageExists(imageUrl);
+        if (!imageExists) {
+          return res.status(400).json({
+            error: {
+              code: 'INVALID_IMAGE_URL',
+              message: 'Image not found in storage. Please upload the image first.',
+              retryable: false
+            }
+          });
+        }
+      }
+      
+      const nominee = new Nominee({
+        name,
+        bio,
+        awardId,
+        imageUrl,
+        displayOrder: 0,
+        createdBy: req.user._id,
+        nominatedBy: req.user._id,
+        isPublicNomination: true,
+        approvalStatus: 'pending'
+      });
+      
+      await nominee.save();
+      await nominee.populate([
+        { path: 'nominatedBy', select: 'name email' },
+        { 
+          path: 'award', 
+          select: 'title criteria allowPublicNomination',
+          populate: {
+            path: 'category',
+            select: 'name slug'
+          }
+        }
+      ]);
+      
+      // Process image URL for response
+      if (nominee.imageUrl) {
+        nominee.imageUrls = {
+          thumbnail: await processImageUrl(nominee.imageUrl, { width: 100, height: 100, quality: 80 }),
+          medium: await processImageUrl(nominee.imageUrl, { width: 400, height: 400, quality: 85 }),
+          original: await processImageUrl(nominee.imageUrl)
+        };
+        nominee.imageUrl = nominee.imageUrls.medium;
+      }
+      
+      res.status(201).json({ 
+        nominee,
+        message: 'Nomination submitted successfully and is pending approval'
+      });
+    } catch (error) {
+      console.error('Error creating public nomination:', error);
+      
+      // Handle duplicate key error
+      if (error.code === 11000) {
+        return res.status(409).json({
+          error: {
+            code: 'DUPLICATE_NOMINATION',
+            message: 'This person has already been nominated for this award',
+            retryable: false
+          }
+        });
+      }
+      
+      res.status(500).json({
+        error: {
+          code: 'CREATE_NOMINATION_ERROR',
+          message: 'Failed to create nomination',
           retryable: true
         }
       });
@@ -1159,6 +1355,431 @@ router.delete('/nominees/:id',
         error: {
           code: 'DELETE_NOMINEE_ERROR',
           message: 'Failed to delete nominee',
+          retryable: true
+        }
+      });
+    }
+  }
+);
+
+// GET /api/content/nominations/pending - Get pending nominations (panelist+ only)
+router.get('/nominations/pending',
+  authenticate,
+  requirePermission('nomination:read_all'),
+  async (req, res) => {
+    try {
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 20;
+      const skip = (page - 1) * limit;
+      
+      const awardId = req.query.awardId;
+      const filter = { 
+        isPublicNomination: true,
+        approvalStatus: 'pending'
+      };
+      
+      if (awardId) {
+        filter.awardId = awardId;
+      }
+      
+      const [nominations, total] = await Promise.all([
+        Nominee.find(filter)
+          .populate([
+            { path: 'nominatedBy', select: 'name email' },
+            { 
+              path: 'award', 
+              select: 'title criteria allowPublicNomination',
+              populate: {
+                path: 'category',
+                select: 'name slug'
+              }
+            }
+          ])
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit),
+        Nominee.countDocuments(filter)
+      ]);
+      
+      // Process image URLs for response
+      for (const nomination of nominations) {
+        if (nomination.imageUrl) {
+          nomination.imageUrls = {
+            thumbnail: await processImageUrl(nomination.imageUrl, { width: 100, height: 100, quality: 80 }),
+            medium: await processImageUrl(nomination.imageUrl, { width: 400, height: 400, quality: 85 }),
+            original: await processImageUrl(nomination.imageUrl)
+          };
+          nomination.imageUrl = nomination.imageUrls.medium;
+        }
+      }
+      
+      res.json({
+        nominations,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit)
+        }
+      });
+    } catch (error) {
+      console.error('Error fetching pending nominations:', error);
+      res.status(500).json({
+        error: {
+          code: 'FETCH_NOMINATIONS_ERROR',
+          message: 'Failed to fetch pending nominations',
+          retryable: true
+        }
+      });
+    }
+  }
+);
+
+// POST /api/content/nominations/:id/approve - Approve a public nomination (panelist+ only)
+router.post('/nominations/:id/approve',
+  authenticate,
+  requirePermission('nomination:approve'),
+  validate(schemas.nominationApproval),
+  async (req, res) => {
+    try {
+      const { displayOrder } = req.body;
+      
+      const nomination = await Nominee.findById(req.params.id);
+      if (!nomination) {
+        return res.status(404).json({
+          error: {
+            code: 'NOMINATION_NOT_FOUND',
+            message: 'Nomination not found',
+            retryable: false
+          }
+        });
+      }
+      
+      if (!nomination.isPublicNomination) {
+        return res.status(400).json({
+          error: {
+            code: 'NOT_PUBLIC_NOMINATION',
+            message: 'This is not a public nomination',
+            retryable: false
+          }
+        });
+      }
+      
+      if (nomination.approvalStatus !== 'pending') {
+        return res.status(400).json({
+          error: {
+            code: 'NOMINATION_ALREADY_PROCESSED',
+            message: `Nomination has already been ${nomination.approvalStatus}`,
+            retryable: false
+          }
+        });
+      }
+      
+      // Update nomination status
+      nomination.approvalStatus = 'approved';
+      nomination.approvedBy = req.user._id;
+      nomination.approvedAt = new Date();
+      nomination.isActive = true;
+      
+      if (displayOrder !== undefined) {
+        nomination.displayOrder = displayOrder;
+      }
+      
+      await nomination.save();
+      await nomination.populate([
+        { path: 'nominatedBy', select: 'name email' },
+        { path: 'approvedBy', select: 'name email' },
+        { 
+          path: 'award', 
+          select: 'title criteria allowPublicNomination',
+          populate: {
+            path: 'category',
+            select: 'name slug'
+          }
+        }
+      ]);
+      
+      // Process image URL for response
+      if (nomination.imageUrl) {
+        nomination.imageUrls = {
+          thumbnail: await processImageUrl(nomination.imageUrl, { width: 100, height: 100, quality: 80 }),
+          medium: await processImageUrl(nomination.imageUrl, { width: 400, height: 400, quality: 85 }),
+          original: await processImageUrl(nomination.imageUrl)
+        };
+        nomination.imageUrl = nomination.imageUrls.medium;
+      }
+      
+      res.json({ 
+        nomination,
+        message: 'Nomination approved successfully'
+      });
+    } catch (error) {
+      console.error('Error approving nomination:', error);
+      res.status(500).json({
+        error: {
+          code: 'APPROVE_NOMINATION_ERROR',
+          message: 'Failed to approve nomination',
+          retryable: true
+        }
+      });
+    }
+  }
+);
+
+// POST /api/content/nominations/:id/reject - Reject a public nomination (panelist+ only)
+router.post('/nominations/:id/reject',
+  authenticate,
+  requirePermission('nomination:reject'),
+  validate(schemas.nominationRejection),
+  async (req, res) => {
+    try {
+      const { reason } = req.body;
+      
+      if (!reason || !reason.trim()) {
+        return res.status(400).json({
+          error: {
+            code: 'REJECTION_REASON_REQUIRED',
+            message: 'Rejection reason is required',
+            retryable: false
+          }
+        });
+      }
+      
+      const nomination = await Nominee.findById(req.params.id);
+      if (!nomination) {
+        return res.status(404).json({
+          error: {
+            code: 'NOMINATION_NOT_FOUND',
+            message: 'Nomination not found',
+            retryable: false
+          }
+        });
+      }
+      
+      if (!nomination.isPublicNomination) {
+        return res.status(400).json({
+          error: {
+            code: 'NOT_PUBLIC_NOMINATION',
+            message: 'This is not a public nomination',
+            retryable: false
+          }
+        });
+      }
+      
+      if (nomination.approvalStatus !== 'pending') {
+        return res.status(400).json({
+          error: {
+            code: 'NOMINATION_ALREADY_PROCESSED',
+            message: `Nomination has already been ${nomination.approvalStatus}`,
+            retryable: false
+          }
+        });
+      }
+      
+      // Update nomination status
+      nomination.approvalStatus = 'rejected';
+      nomination.approvedBy = req.user._id;
+      nomination.approvedAt = new Date();
+      nomination.rejectionReason = reason.trim();
+      nomination.isActive = false;
+      
+      await nomination.save();
+      await nomination.populate([
+        { path: 'nominatedBy', select: 'name email' },
+        { path: 'approvedBy', select: 'name email' },
+        { 
+          path: 'award', 
+          select: 'title criteria allowPublicNomination',
+          populate: {
+            path: 'category',
+            select: 'name slug'
+          }
+        }
+      ]);
+      
+      res.json({ 
+        nomination,
+        message: 'Nomination rejected successfully'
+      });
+    } catch (error) {
+      console.error('Error rejecting nomination:', error);
+      res.status(500).json({
+        error: {
+          code: 'REJECT_NOMINATION_ERROR',
+          message: 'Failed to reject nomination',
+          retryable: true
+        }
+      });
+    }
+  }
+);
+
+// GET /api/content/nominations/my - Get user's own nominations
+router.get('/nominations/my',
+  authenticate,
+  requirePermission('nomination:read_own'),
+  async (req, res) => {
+    try {
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 20;
+      const skip = (page - 1) * limit;
+      
+      const [nominations, total] = await Promise.all([
+        Nominee.find({ 
+          nominatedBy: req.user._id,
+          isPublicNomination: true
+        })
+          .populate([
+            { 
+              path: 'award', 
+              select: 'title criteria allowPublicNomination',
+              populate: {
+                path: 'category',
+                select: 'name slug'
+              }
+            },
+            { path: 'approvedBy', select: 'name email' }
+          ])
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit),
+        Nominee.countDocuments({ 
+          nominatedBy: req.user._id,
+          isPublicNomination: true
+        })
+      ]);
+      
+      // Process image URLs for response
+      for (const nomination of nominations) {
+        if (nomination.imageUrl) {
+          nomination.imageUrls = {
+            thumbnail: await processImageUrl(nomination.imageUrl, { width: 100, height: 100, quality: 80 }),
+            medium: await processImageUrl(nomination.imageUrl, { width: 400, height: 400, quality: 85 }),
+            original: await processImageUrl(nomination.imageUrl)
+          };
+          nomination.imageUrl = nomination.imageUrls.medium;
+        }
+      }
+      
+      res.json({
+        nominations,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit)
+        }
+      });
+    } catch (error) {
+      console.error('Error fetching user nominations:', error);
+      res.status(500).json({
+        error: {
+          code: 'FETCH_USER_NOMINATIONS_ERROR',
+          message: 'Failed to fetch your nominations',
+          retryable: true
+        }
+      });
+    }
+  }
+);
+
+// GET /api/content/awards/:id/nominees - Get nominees for a specific award (public)
+router.get('/awards/:id/nominees', async (req, res) => {
+  try {
+    const { includeInactive = false } = req.query;
+    
+    // Verify award exists
+    const award = await Award.findById(req.params.id);
+    if (!award) {
+      return res.status(404).json({
+        error: {
+          code: 'AWARD_NOT_FOUND',
+          message: 'Award not found',
+          retryable: false
+        }
+      });
+    }
+    
+    // Only show approved nominees to public
+    const filter = { 
+      awardId: req.params.id,
+      approvalStatus: 'approved'
+    };
+    
+    if (!includeInactive) {
+      filter.isActive = true;
+    }
+    
+    const nominees = await Nominee.find(filter)
+      .populate('createdBy', 'name email')
+      .populate('nominatedBy', 'name email')
+      .sort({ displayOrder: 1, name: 1 });
+    
+    // Process image URLs
+    for (const nominee of nominees) {
+      if (nominee.imageUrl) {
+        nominee.imageUrls = {
+          thumbnail: await processImageUrl(nominee.imageUrl, { width: 100, height: 100, quality: 80 }),
+          medium: await processImageUrl(nominee.imageUrl, { width: 300, height: 300, quality: 85 }),
+          original: await processImageUrl(nominee.imageUrl)
+        };
+        nominee.imageUrl = nominee.imageUrls.medium;
+      }
+    }
+    
+    res.json({
+      nominees,
+      award: {
+        _id: award._id,
+        title: award.title
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching award nominees:', error);
+    res.status(500).json({
+      error: {
+        code: 'FETCH_AWARD_NOMINEES_ERROR',
+        message: 'Failed to fetch award nominees',
+        retryable: true
+      }
+    });
+  }
+});
+
+// GET /api/content/awards/:id/nomination-status - Check if award allows public nomination
+router.get('/awards/:id/nomination-status',
+  async (req, res) => {
+    try {
+      const award = await Award.findById(req.params.id).select('title allowPublicNomination nominationStartDate nominationEndDate');
+      
+      if (!award) {
+        return res.status(404).json({
+          error: {
+            code: 'AWARD_NOT_FOUND',
+            message: 'Award not found',
+            retryable: false
+          }
+        });
+      }
+      
+      const nominationStatus = award.isPublicNominationOpen();
+      
+      res.json({
+        award: {
+          id: award._id,
+          title: award.title,
+          allowPublicNomination: award.allowPublicNomination,
+          nominationStartDate: award.nominationStartDate,
+          nominationEndDate: award.nominationEndDate
+        },
+        nominationStatus
+      });
+    } catch (error) {
+      console.error('Error checking nomination status:', error);
+      res.status(500).json({
+        error: {
+          code: 'CHECK_NOMINATION_STATUS_ERROR',
+          message: 'Failed to check nomination status',
           retryable: true
         }
       });

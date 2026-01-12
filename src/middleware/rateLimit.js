@@ -293,22 +293,31 @@ async function handleResponseComplete(req, res) {
  * Rate limiter for authentication endpoints
  * Strict limits to prevent brute force attacks
  */
-const authRateLimit = createRateLimit({
-  ...DEFAULT_LIMITS.auth,
-  keyGenerator: (req) => {
-    const ip = req.ip || req.connection.remoteAddress || 'unknown';
-    return `rate_limit:auth:${ip}`;
-  },
-  message: 'Too many authentication attempts, please try again later',
-  onLimitReached: (req, res, result) => {
-    console.warn('Authentication rate limit exceeded:', {
-      ip: req.ip,
-      endpoint: req.path,
-      count: result.count,
-      userAgent: req.get('User-Agent')
-    });
+const authRateLimit = (req, res, next) => {
+  // Skip rate limiting in development
+  if (process.env.NODE_ENV === 'development') {
+    console.log('🔧 Development mode: Skipping auth rate limiting');
+    return next();
   }
-});
+  
+  // Apply rate limiting in production
+  return createRateLimit({
+    ...DEFAULT_LIMITS.auth,
+    keyGenerator: (req) => {
+      const ip = req.ip || req.connection.remoteAddress || 'unknown';
+      return `rate_limit:auth:${ip}`;
+    },
+    message: 'Too many authentication attempts, please try again later',
+    onLimitReached: (req, res, result) => {
+      console.warn('Authentication rate limit exceeded:', {
+        ip: req.ip,
+        endpoint: req.path,
+        count: result.count,
+        userAgent: req.get('User-Agent')
+      });
+    }
+  })(req, res, next);
+};
 
 /**
  * Rate limiter for vote submission endpoints

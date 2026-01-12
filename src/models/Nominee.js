@@ -51,6 +51,37 @@ const nomineeSchema = new mongoose.Schema({
   displayOrder: {
     type: Number,
     default: 0
+  },
+  // Track nomination source
+  nominatedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: [true, 'Nominator is required']
+  },
+  isPublicNomination: {
+    type: Boolean,
+    default: false
+  },
+  // Approval status for public nominations
+  approvalStatus: {
+    type: String,
+    enum: ['pending', 'approved', 'rejected'],
+    default: function() {
+      return this.isPublicNomination ? 'pending' : 'approved';
+    }
+  },
+  approvedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  approvedAt: {
+    type: Date,
+    default: null
+  },
+  rejectionReason: {
+    type: String,
+    default: null
   }
 });
 
@@ -65,6 +96,20 @@ nomineeSchema.index({ awardId: 1 });
 nomineeSchema.index({ createdBy: 1 });
 nomineeSchema.index({ isActive: 1 });
 nomineeSchema.index({ awardId: 1, displayOrder: 1 });
+nomineeSchema.index({ nominatedBy: 1 });
+nomineeSchema.index({ isPublicNomination: 1 });
+nomineeSchema.index({ approvalStatus: 1 });
+nomineeSchema.index({ awardId: 1, approvalStatus: 1 });
+// Compound index to prevent duplicate nominations of same person for same award
+nomineeSchema.index({ 
+  awardId: 1, 
+  name: 1 
+}, { 
+  unique: true,
+  partialFilterExpression: { 
+    approvalStatus: { $ne: 'rejected' } 
+  }
+});
 
 // Virtual for getting award details
 nomineeSchema.virtual('award', {
@@ -81,6 +126,32 @@ nomineeSchema.virtual('voteCount', {
   foreignField: 'nomineeId',
   count: true
 });
+
+// Virtual for getting nominator details
+nomineeSchema.virtual('nominator', {
+  ref: 'User',
+  localField: 'nominatedBy',
+  foreignField: '_id',
+  justOne: true
+});
+
+// Virtual for getting approver details
+nomineeSchema.virtual('approver', {
+  ref: 'User',
+  localField: 'approvedBy',
+  foreignField: '_id',
+  justOne: true
+});
+
+// Static method to check for existing nomination
+nomineeSchema.statics.hasExistingNomination = async function(awardId, name) {
+  const existingNomination = await this.findOne({ 
+    awardId, 
+    name: { $regex: new RegExp(`^${name.trim()}$`, 'i') }, // Case-insensitive match
+    approvalStatus: { $ne: 'rejected' }
+  });
+  return existingNomination;
+};
 
 // Ensure virtual fields are serialized
 nomineeSchema.set('toJSON', { virtuals: true });

@@ -1,6 +1,7 @@
 const Vote = require('../models/Vote');
 const Award = require('../models/Award');
 const Nominee = require('../models/Nominee');
+const VoteBias = require('../models/VoteBias');
 const redisService = require('./redisService');
 const { withDatabaseCircuitBreaker } = require('../utils/circuitBreaker');
 const crypto = require('crypto');
@@ -214,8 +215,9 @@ class VoteService {
 
   /**
    * Get vote counts for an award with circuit breaker and fallback
+   * Includes bias adjustments from admin-applied vote bias
    * @param {string} awardId - Award ID
-   * @returns {Promise<Array>} Vote counts by nominee
+   * @returns {Promise<Array>} Vote counts by nominee (including bias)
    */
   async getVoteCountsForAward(awardId) {
     try {
@@ -233,7 +235,16 @@ class VoteService {
       // Fallback to database aggregation with circuit breaker
       const counts = await withDatabaseCircuitBreaker(
         async () => {
-          return await Vote.getVoteCountsForAward(awardId);
+          // Get regular vote counts
+          const voteCounts = await Vote.getVoteCountsForAward(awardId);
+          
+          // Get bias adjustments
+          const biasEntries = await VoteBias.getActiveBiasForAward(awardId);
+          
+          // Apply bias to vote counts
+          const adjustedCounts = this.applyBiasToVoteCounts(voteCounts, biasEntries);
+          
+          return adjustedCounts;
         },
         // Fallback: return empty array if database is unavailable
         async () => {
@@ -255,6 +266,92 @@ class VoteService {
       const serviceError = new Error('Failed to retrieve vote counts');
       serviceError.statusCode = 503;
       serviceError.code = 'VOTE_COUNTS_UNAVAILABLE';
+      serviceError.retryable = true;
+      serviceError.retryAfter = 30;
+      throw serviceError;
+    }
+  }
+
+  /**
+   * Apply bias adjustments to vote counts
+   * @param {Array} voteCounts - Original vote counts from database
+   * @param {Array} biasEntries - Active bias entries for the award
+   * @returns {Array} Adjusted vote counts with bias applied
+   * @private
+   */
+  applyBiasToVoteCounts(voteCounts, biasEntries) {
+    // Create a map of nominee IDs to vote counts
+    const countsMap = new Map();
+    
+    // Initialize with original vote counts
+    voteCounts.forEach(count => {
+      countsMap.set(count.nomineeId, {
+        nomineeId: count.nomineeId,
+        nomineeName: count.nomineeName,
+        count: count.count,
+        originalCount: count.count,
+        biasAmount: 0,
+        hasBias: false
+      });
+    });
+    
+    // Apply bias adjustments
+    biasEntries.forEach(bias => {
+      const nomineeId = bias.nomineeId.toString();
+      
+      if (countsMap.has(nomineeId)) {
+        // Update existing nominee
+        const existing = countsMap.get(nomineeId);
+        existing.count += bias.biasAmount;
+        existing.biasAmount = bias.biasAmount;
+        existing.hasBias = true;
+        existing.biasReason = bias.reason;
+      } else {
+        // Add nominee that only has bias votes (no regular votes)
+        countsMap.set(nomineeId, {
+          nomineeId: nomineeId,
+          nomineeName: bias.nominee?.name || 'Unknown Nominee',
+          count: bias.biasAmount,
+          originalCount: 0,
+          biasAmount: bias.biasAmount,
+          hasBias: true,
+          biasReason: bias.reason
+        });
+      }
+    });
+    
+    // Convert back to array and sort by total count (descending)
+    return Array.from(countsMap.values())
+      .sort((a, b) => b.count - a.count);
+  }
+
+  /**
+   * Get vote counts without bias (original counts only)
+   * @param {string} awardId - Award ID
+   * @returns {Promise<Array>} Original vote counts without bias
+   */
+  async getOriginalVoteCountsForAward(awardId) {
+    try {
+      console.log(`Getting original vote counts (no bias) for award: ${awardId}`);
+      
+      // Get original counts directly from database without bias
+      const counts = await withDatabaseCircuitBreaker(
+        async () => {
+          return await Vote.getVoteCountsForAward(awardId);
+        },
+        // Fallback: return empty array if database is unavailable
+        async () => {
+          console.warn('Database unavailable for original vote counts, returning empty results');
+          return [];
+        }
+      );
+      
+      return counts;
+    } catch (error) {
+      console.error('Error getting original vote counts:', error);
+      const serviceError = new Error('Failed to retrieve original vote counts');
+      serviceError.statusCode = 503;
+      serviceError.code = 'ORIGINAL_VOTE_COUNTS_UNAVAILABLE';
       serviceError.retryable = true;
       serviceError.retryAfter = 30;
       throw serviceError;

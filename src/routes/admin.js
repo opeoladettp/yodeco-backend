@@ -10,6 +10,9 @@ const redisService = require('../services/redisService');
 const auditService = require('../services/auditService');
 const backgroundJobs = require('../services/backgroundJobs');
 
+// Import vote bias routes
+const voteBiasRoutes = require('./voteBias');
+
 /**
  * Get all users (admin only)
  * GET /api/admin/users
@@ -1602,3 +1605,6 @@ async function getAuditLogCount(filter) {
 // Export the trackUserActivity function for use in other modules
 module.exports = router;
 module.exports.trackUserActivity = trackUserActivity;
+
+// Mount vote bias routes
+router.use('/vote-bias', voteBiasRoutes);

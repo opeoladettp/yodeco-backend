@@ -56,7 +56,10 @@ const schemas = {
     imageUrl: Joi.string().optional(),
     votingStartDate: Joi.date().optional(),
     votingEndDate: Joi.date().optional(),
-    isActive: Joi.boolean().optional()
+    isActive: Joi.boolean().optional(),
+    allowPublicNomination: Joi.boolean().optional(),
+    nominationStartDate: Joi.date().optional(),
+    nominationEndDate: Joi.date().optional()
   }),
 
   nomineeCreation: Joi.object({
@@ -65,6 +68,24 @@ const schemas = {
     awardId: Joi.string().pattern(/^[0-9a-fA-F]{24}$/).required(),
     imageUrl: Joi.string().optional(),
     displayOrder: Joi.number().integer().min(0).optional()
+  }),
+
+  // Public nomination validation (simpler than nominee creation)
+  publicNomination: Joi.object({
+    name: Joi.string().min(1).max(100).required(),
+    bio: Joi.string().min(1).max(2000).required(),
+    awardId: Joi.string().pattern(/^[0-9a-fA-F]{24}$/).required(),
+    imageUrl: Joi.string().optional()
+  }),
+
+  // Nomination approval validation
+  nominationApproval: Joi.object({
+    displayOrder: Joi.number().integer().min(0).optional()
+  }),
+
+  // Nomination rejection validation
+  nominationRejection: Joi.object({
+    reason: Joi.string().min(1).max(500).required()
   }),
 
   // Query parameter validation

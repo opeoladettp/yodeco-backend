@@ -23,6 +23,8 @@ const ROLE_PERMISSIONS = {
     'vote:create',
     'vote:read_own',
     'content:read',
+    'nomination:create', // New permission for public nominations
+    'nomination:read_own',
     'profile:read_own',
     'profile:update_own'
   ],
@@ -34,6 +36,11 @@ const ROLE_PERMISSIONS = {
     'content:create',
     'content:update',
     'content:delete',
+    'nomination:create',
+    'nomination:read_own',
+    'nomination:read_all',
+    'nomination:approve', // New permission to approve public nominations
+    'nomination:reject',
     'media:upload',
     'profile:read_own',
     'profile:update_own'
@@ -47,6 +54,11 @@ const ROLE_PERMISSIONS = {
     'content:create',
     'content:update',
     'content:delete',
+    'nomination:create',
+    'nomination:read_own',
+    'nomination:read_all',
+    'nomination:approve',
+    'nomination:reject',
     'media:upload',
     'user:read_all',
     'user:update_role',

@@ -333,20 +333,28 @@ class JWTService {
   setTokenCookies(res, accessToken, refreshToken) {
     const isProduction = process.env.NODE_ENV === 'production';
     
-    // Set access token cookie (15 minutes)
-    res.cookie('accessToken', accessToken, {
+    // For local development, set domain to allow cross-port access
+    const cookieOptions = {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? 'strict' : 'lax',
+    };
+    
+    // In development, set domain to localhost to allow cross-port access
+    if (!isProduction) {
+      cookieOptions.domain = 'localhost';
+    }
+    
+    // Set access token cookie (15 minutes)
+    res.cookie('accessToken', accessToken, {
+      ...cookieOptions,
       maxAge: 15 * 60 * 1000, // 15 minutes
       path: '/'
     });
     
     // Set refresh token cookie (7 days)
     res.cookie('refreshToken', refreshToken, {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'strict' : 'lax',
+      ...cookieOptions,
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
       path: '/api/auth' // Restrict refresh token to auth endpoints only
     });
@@ -357,8 +365,16 @@ class JWTService {
    * @param {Object} res - Express response object
    */
   clearTokenCookies(res) {
-    res.clearCookie('accessToken', { path: '/' });
-    res.clearCookie('refreshToken', { path: '/api/auth' });
+    const isProduction = process.env.NODE_ENV === 'production';
+    const clearOptions = {};
+    
+    // In development, set domain to localhost to match cookie setting
+    if (!isProduction) {
+      clearOptions.domain = 'localhost';
+    }
+    
+    res.clearCookie('accessToken', { path: '/', ...clearOptions });
+    res.clearCookie('refreshToken', { path: '/api/auth', ...clearOptions });
   }
 
   /**

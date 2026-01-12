@@ -36,8 +36,14 @@ router.get('/google/callback',
       // Set secure httpOnly cookies
       jwtService.setTokenCookies(res, accessToken, refreshToken);
       
-      // Determine redirect URL based on request origin or query parameter
+      // Determine redirect URL based on environment and request context
       let redirectUrl = process.env.FRONTEND_URL;
+      
+      // In development mode, always redirect to localhost
+      if (process.env.NODE_ENV === 'development') {
+        redirectUrl = 'http://localhost:3000';
+        console.log('🔧 Development mode: Redirecting to localhost:3000');
+      }
       
       // Check if request came from localhost (development)
       const origin = req.get('Origin') || req.get('Referer');
@@ -50,6 +56,8 @@ router.get('/google/callback',
         redirectUrl = 'http://localhost:3000';
       }
       
+      console.log('OAuth redirect URL:', redirectUrl);
+      
       // Redirect to frontend with success
       res.redirect(`${redirectUrl}/?login=success`);
       
@@ -58,6 +66,12 @@ router.get('/google/callback',
       
       // Use same logic for error redirects
       let redirectUrl = process.env.FRONTEND_URL;
+      
+      // In development mode, always redirect to localhost
+      if (process.env.NODE_ENV === 'development') {
+        redirectUrl = 'http://localhost:3000';
+      }
+      
       const origin = req.get('Origin') || req.get('Referer');
       if (origin && origin.includes('localhost:3000')) {
         redirectUrl = 'http://localhost:3000';
@@ -65,6 +79,8 @@ router.get('/google/callback',
       if (req.query.redirect_to === 'localhost') {
         redirectUrl = 'http://localhost:3000';
       }
+      
+      console.log('OAuth error redirect URL:', redirectUrl);
       
       res.redirect(`${redirectUrl}/login?error=server_error`);
     }
