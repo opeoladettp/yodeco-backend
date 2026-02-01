@@ -5,7 +5,9 @@ const { requirePermission } = require('../middleware/rbac');
 const { validate, schemas } = require('../middleware/validation');
 const { contentIdempotency } = require('../middleware/idempotency');
 const { Category, Award, Nominee } = require('../models');
+const BiometricData = require('../models/BiometricData');
 const mediaService = require('../services/mediaService');
+const securityLogger = require('../utils/securityLogger');
 
 // Helper function to generate slug from name
 const generateSlug = (name) => {
@@ -624,7 +626,18 @@ router.put('/awards/:id',
   validate(schemas.awardCreation),
   async (req, res) => {
     try {
-      const { title, criteria, categoryId, imageUrl, votingStartDate, votingEndDate, isActive } = req.body;
+      const { 
+        title, 
+        criteria, 
+        categoryId, 
+        imageUrl, 
+        votingStartDate, 
+        votingEndDate, 
+        isActive,
+        allowPublicNomination,
+        nominationStartDate,
+        nominationEndDate
+      } = req.body;
       
       // Verify category exists
       const category = await Category.findById(categoryId);
@@ -684,9 +697,27 @@ router.put('/awards/:id',
         }
       }
       
+      // Build update object
+      const updateData = {
+        title,
+        criteria,
+        categoryId,
+        imageUrl,
+        votingStartDate: votingStartDate || null,
+        votingEndDate: votingEndDate || null,
+        isActive,
+        allowPublicNomination: allowPublicNomination || false,
+        nominationStartDate: nominationStartDate || null,
+        nominationEndDate: nominationEndDate || null
+      };
+      
+      // Log the update for debugging
+      console.log('Updating award:', req.params.id);
+      console.log('Update data:', JSON.stringify(updateData, null, 2));
+      
       const award = await Award.findByIdAndUpdate(
         req.params.id,
-        { title, criteria, categoryId, imageUrl, votingStartDate, votingEndDate, isActive },
+        updateData,
         { new: true, runValidators: true }
       ).populate([
         { path: 'createdBy', select: 'name email' },
@@ -1063,11 +1094,16 @@ router.post('/nominations',
   validate(schemas.publicNomination),
   async (req, res) => {
     try {
+      console.log('=== PUBLIC NOMINATION SUBMISSION ===');
+      console.log('User:', req.user?.email, 'Role:', req.user?.role);
+      console.log('Request body:', JSON.stringify(req.body, null, 2));
+      
       const { name, bio, awardId, imageUrl } = req.body;
       
       // Verify award exists
       const award = await Award.findById(awardId);
       if (!award) {
+        console.log('Award not found:', awardId);
         return res.status(404).json({
           error: {
             code: 'AWARD_NOT_FOUND',
@@ -1077,9 +1113,14 @@ router.post('/nominations',
         });
       }
       
+      console.log('Award found:', award.title, 'Allow public nomination:', award.allowPublicNomination);
+      
       // Check if public nomination is allowed for this award
       const nominationStatus = award.isPublicNominationOpen();
+      console.log('Nomination status:', nominationStatus);
+      
       if (!nominationStatus.allowed) {
+        console.log('Nomination not allowed:', nominationStatus.reason);
         return res.status(403).json({
           error: {
             code: 'NOMINATION_NOT_ALLOWED',
@@ -1095,6 +1136,8 @@ router.post('/nominations',
       
       // Check for existing nomination
       const existingNomination = await Nominee.hasExistingNomination(awardId, name);
+      console.log('Existing nomination check:', existingNomination ? 'Found duplicate' : 'No duplicate');
+      
       if (existingNomination) {
         return res.status(409).json({
           error: {
@@ -1115,8 +1158,10 @@ router.post('/nominations',
       
       // Validate image exists and format if provided
       if (imageUrl) {
+        console.log('Validating image URL:', imageUrl);
         const imageExists = await validateImageExists(imageUrl);
         if (!imageExists) {
+          console.log('Image validation failed - not found');
           return res.status(400).json({
             error: {
               code: 'INVALID_IMAGE_URL',
@@ -1127,6 +1172,7 @@ router.post('/nominations',
         }
       }
       
+      console.log('Creating nominee...');
       const nominee = new Nominee({
         name,
         bio,
@@ -1140,6 +1186,8 @@ router.post('/nominations',
       });
       
       await nominee.save();
+      console.log('Nominee saved successfully:', nominee._id);
+      
       await nominee.populate([
         { path: 'nominatedBy', select: 'name email' },
         { 
@@ -1162,12 +1210,14 @@ router.post('/nominations',
         nominee.imageUrl = nominee.imageUrls.medium;
       }
       
+      console.log('Nomination submission successful');
       res.status(201).json({ 
         nominee,
         message: 'Nomination submitted successfully and is pending approval'
       });
     } catch (error) {
       console.error('Error creating public nomination:', error);
+      console.error('Error stack:', error.stack);
       
       // Handle duplicate key error
       if (error.code === 11000) {
@@ -1786,3 +1836,334 @@ router.get('/awards/:id/nomination-status',
     }
   }
 );
+
+// ===== BIOMETRIC VERIFICATION ROUTES =====
+
+// POST /api/content/votes/check-biometric-duplicate - Check for duplicate biometric data
+router.post('/votes/check-biometric-duplicate',
+  authenticate,
+  async (req, res) => {
+    try {
+      const { faceSignature, awardId } = req.body;
+      const securityContext = securityLogger.createSecurityContext(req);
+      
+      if (!faceSignature || !faceSignature.data || !awardId) {
+        return res.status(400).json({
+          error: {
+            code: 'INVALID_BIOMETRIC_DATA',
+            message: 'Face signature and award ID are required',
+            retryable: false
+          }
+        });
+      }
+      
+      // Find potential duplicates using the BiometricData model
+      const matches = await BiometricData.findPotentialDuplicates(
+        faceSignature, 
+        awardId, 
+        req.user._id, 
+        0.6 // Threshold for face matching
+      );
+      
+      const isDuplicate = matches.length > 0;
+      const highestConfidence = isDuplicate ? matches[0].confidence : 0;
+      
+      // Log the biometric check for audit purposes
+      console.log(`Biometric duplicate check for user ${req.user._id}, award ${awardId}: ${isDuplicate ? 'DUPLICATE FOUND' : 'NO DUPLICATES'}`);
+      
+      if (isDuplicate) {
+        console.log(`Duplicate match details:`, {
+          matchedUserId: matches[0].userId,
+          confidence: matches[0].confidence,
+          timestamp: matches[0].timestamp
+        });
+      }
+      
+      res.json({
+        isDuplicate,
+        confidence: highestConfidence,
+        matches: matches.slice(0, 3), // Return top 3 matches for analysis
+        message: isDuplicate 
+          ? `Biometric match found with ${(highestConfidence * 100).toFixed(1)}% confidence`
+          : 'No biometric duplicates detected'
+      });
+      
+    } catch (error) {
+      console.error('Biometric duplicate check error:', error);
+      res.status(500).json({
+        error: {
+          code: 'BIOMETRIC_CHECK_ERROR',
+          message: 'Failed to check for biometric duplicates',
+          retryable: true
+        }
+      });
+    }
+  }
+);
+
+// POST /api/content/votes/store-biometric-data - Store biometric data for vote
+router.post('/votes/store-biometric-data',
+  authenticate,
+  async (req, res) => {
+    try {
+      const { faceSignature, awardId, userId } = req.body;
+      const securityContext = securityLogger.createSecurityContext(req);
+      
+      if (!faceSignature || !faceSignature.data || !awardId) {
+        return res.status(400).json({
+          error: {
+            code: 'INVALID_BIOMETRIC_DATA',
+            message: 'Face signature and award ID are required',
+            retryable: false
+          }
+        });
+      }
+      
+      // Verify the user is storing their own biometric data or is an admin
+      if (userId && userId !== req.user._id.toString() && req.user.role !== 'System_Admin') {
+        return res.status(403).json({
+          error: {
+            code: 'UNAUTHORIZED_BIOMETRIC_STORAGE',
+            message: 'Cannot store biometric data for another user',
+            retryable: false
+          }
+        });
+      }
+      
+      // Generate biometric hash for indexing
+      const biometricHash = generateBiometricHash(faceSignature.data);
+      
+      // Calculate confidence and quality metrics
+      const confidence = Math.min(0.95, Math.max(0.5, Math.random() * 0.45 + 0.5)); // Simulated confidence
+      const faceQuality = {
+        faceDetected: true,
+        confidence: confidence,
+        isGoodQuality: confidence > 0.7,
+        issues: confidence < 0.7 ? ['Lower confidence detection'] : []
+      };
+      
+      // Create biometric data record
+      const biometricData = new BiometricData({
+        userId: userId || req.user._id,
+        awardId,
+        faceSignature,
+        biometricHash,
+        confidence,
+        faceQuality,
+        metadata: {
+          ipAddress: securityContext.ipAddress,
+          userAgent: securityContext.userAgent,
+          deviceInfo: req.headers['user-agent'] || 'Unknown',
+          verificationSource: 'web'
+        }
+      });
+      
+      await biometricData.save();
+      
+      console.log(`Biometric data stored for user ${biometricData.userId}, award ${awardId}, hash: ${biometricHash}`);
+      
+      res.status(201).json({
+        message: 'Biometric data stored successfully',
+        biometricId: biometricData._id,
+        biometricHash,
+        confidence,
+        timestamp: biometricData.createdAt
+      });
+      
+    } catch (error) {
+      console.error('Biometric data storage error:', error);
+      
+      if (error.code === 11000) {
+        return res.status(409).json({
+          error: {
+            code: 'DUPLICATE_BIOMETRIC_DATA',
+            message: 'Biometric data already exists for this user and award',
+            retryable: false
+          }
+        });
+      }
+      
+      res.status(500).json({
+        error: {
+          code: 'BIOMETRIC_STORAGE_ERROR',
+          message: 'Failed to store biometric data',
+          retryable: true
+        }
+      });
+    }
+  }
+);
+
+// GET /api/content/votes/biometric-status/:awardId - Get biometric verification status for award
+router.get('/votes/biometric-status/:awardId',
+  authenticate,
+  async (req, res) => {
+    try {
+      const { awardId } = req.params;
+      
+      // Check if user has already provided biometric data for this award
+      const existingBiometric = await BiometricData.findOne({
+        userId: req.user._id,
+        awardId,
+        isActive: true
+      });
+      
+      const hasVerified = !!existingBiometric;
+      
+      res.json({
+        hasVerified,
+        verificationDate: hasVerified ? existingBiometric.createdAt : null,
+        confidence: hasVerified ? existingBiometric.confidence : null,
+        biometricId: hasVerified ? existingBiometric._id : null
+      });
+      
+    } catch (error) {
+      console.error('Biometric status check error:', error);
+      res.status(500).json({
+        error: {
+          code: 'BIOMETRIC_STATUS_ERROR',
+          message: 'Failed to check biometric verification status',
+          retryable: true
+        }
+      });
+    }
+  }
+);
+
+// DELETE /api/content/votes/biometric-data/:biometricId - Delete biometric data (admin only)
+router.delete('/votes/biometric-data/:biometricId',
+  authenticate,
+  requirePermission('system:admin'),
+  async (req, res) => {
+    try {
+      const { biometricId } = req.params;
+      const { reason } = req.body;
+      
+      const biometricData = await BiometricData.findById(biometricId);
+      
+      if (!biometricData) {
+        return res.status(404).json({
+          error: {
+            code: 'BIOMETRIC_DATA_NOT_FOUND',
+            message: 'Biometric data not found',
+            retryable: false
+          }
+        });
+      }
+      
+      // Soft delete by marking as inactive
+      biometricData.isActive = false;
+      biometricData.deletionReason = reason || 'Deleted by admin';
+      biometricData.deletedBy = req.user._id;
+      biometricData.deletedAt = new Date();
+      
+      await biometricData.save();
+      
+      console.log(`Biometric data ${biometricId} deleted by admin ${req.user._id}`);
+      
+      res.json({
+        message: 'Biometric data deleted successfully',
+        biometricId,
+        deletedAt: biometricData.deletedAt
+      });
+      
+    } catch (error) {
+      console.error('Biometric data deletion error:', error);
+      res.status(500).json({
+        error: {
+          code: 'BIOMETRIC_DELETION_ERROR',
+          message: 'Failed to delete biometric data',
+          retryable: true
+        }
+      });
+    }
+  }
+);
+
+// GET /api/content/votes/biometric-analytics/:awardId - Get biometric analytics for award (admin only)
+router.get('/votes/biometric-analytics/:awardId',
+  authenticate,
+  requirePermission('system:admin'),
+  async (req, res) => {
+    try {
+      const { awardId } = req.params;
+      
+      const analytics = await BiometricData.aggregate([
+        {
+          $match: {
+            awardId: new mongoose.Types.ObjectId(awardId),
+            isActive: true
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            totalVerifications: { $sum: 1 },
+            averageConfidence: { $avg: '$confidence' },
+            highQualityCount: {
+              $sum: {
+                $cond: [{ $eq: ['$faceQuality.isGoodQuality', true] }, 1, 0]
+              }
+            },
+            uniqueUsers: { $addToSet: '$userId' }
+          }
+        },
+        {
+          $project: {
+            _id: 0,
+            totalVerifications: 1,
+            uniqueUsers: { $size: '$uniqueUsers' },
+            averageConfidence: { $round: ['$averageConfidence', 3] },
+            highQualityPercentage: {
+              $round: [
+                { $multiply: [{ $divide: ['$highQualityCount', '$totalVerifications'] }, 100] },
+                1
+              ]
+            }
+          }
+        }
+      ]);
+      
+      const result = analytics[0] || {
+        totalVerifications: 0,
+        uniqueUsers: 0,
+        averageConfidence: 0,
+        highQualityPercentage: 0
+      };
+      
+      res.json({
+        awardId,
+        analytics: result,
+        generatedAt: new Date()
+      });
+      
+    } catch (error) {
+      console.error('Biometric analytics error:', error);
+      res.status(500).json({
+        error: {
+          code: 'BIOMETRIC_ANALYTICS_ERROR',
+          message: 'Failed to generate biometric analytics',
+          retryable: true
+        }
+      });
+    }
+  }
+);
+
+// Helper function to generate biometric hash
+function generateBiometricHash(descriptorArray) {
+  // Create a hash from the face descriptor for audit purposes
+  const hashInput = descriptorArray.join(',');
+  
+  // Simple hash function (in production, use a proper crypto hash)
+  let hash = 0;
+  for (let i = 0; i < hashInput.length; i++) {
+    const char = hashInput.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  
+  return Math.abs(hash).toString(16);
+}
+
+module.exports = router;

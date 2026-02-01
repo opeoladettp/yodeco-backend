@@ -66,15 +66,15 @@ async function deleteProfilePicture(key) {
  */
 router.post('/register', upload.single('profilePicture'), async (req, res) => {
   try {
-    const { firstName, lastName, otherNames, email, phoneNumber, dateOfBirth } = req.body;
+    const { firstName, lastName, otherNames, email, phoneNumber, dateOfBirth, country, state, lga, ward } = req.body;
     const securityContext = securityLogger.createSecurityContext(req);
     
     // Validate required fields
-    if (!firstName || !lastName || !email || !phoneNumber || !dateOfBirth) {
+    if (!firstName || !lastName || !email || !phoneNumber || !dateOfBirth || !country || !state || !lga) {
       return res.status(400).json({
         error: {
           code: 'MISSING_REQUIRED_FIELDS',
-          message: 'firstName, lastName, email, phoneNumber, and dateOfBirth are required',
+          message: 'firstName, lastName, email, phoneNumber, dateOfBirth, country, state, and lga are required',
           retryable: false
         }
       });
@@ -111,6 +111,10 @@ router.post('/register', upload.single('profilePicture'), async (req, res) => {
       email: email.toLowerCase().trim(),
       phoneNumber: phoneNumber.trim(),
       dateOfBirth: new Date(dateOfBirth),
+      country: country.trim(),
+      state: state.trim(),
+      lga: lga.trim(),
+      ward: ward ? ward.trim() : '',
       profilePicture,
       metadata: {
         ipAddress: securityContext.ipAddress,
@@ -131,7 +135,8 @@ router.post('/register', upload.single('profilePicture'), async (req, res) => {
         memberId: member._id,
         registrationNumber: member.registrationNumber,
         email: member.email,
-        fullName: member.fullName
+        fullName: member.fullName,
+        location: `${member.state}, ${member.lga}`
       },
       ipAddress: securityContext.ipAddress,
       userAgent: securityContext.userAgent,
@@ -151,6 +156,10 @@ router.post('/register', upload.single('profilePicture'), async (req, res) => {
         dateOfBirth: member.dateOfBirth,
         age: member.age,
         fullName: member.fullName,
+        country: member.country,
+        state: member.state,
+        lga: member.lga,
+        ward: member.ward,
         profilePicture: member.profilePicture,
         createdAt: member.createdAt
       }

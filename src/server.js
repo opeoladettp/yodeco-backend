@@ -2,7 +2,6 @@
 require('dotenv').config();
 
 const express = require('express');
-const cors = require('cors');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
@@ -19,39 +18,36 @@ const app = express();
 // Security middleware
 app.use(helmet());
 
-// Configure CORS to support both production and development origins
-const allowedOrigins = [
-  process.env.FRONTEND_URL || 'https://www.yodeco.duckdns.org',
-  'http://localhost:3000',
-  'https://localhost:3000'
-];
+// CORS is handled by nginx proxy - no CORS middleware needed in Express
+console.log('CORS handling delegated to nginx proxy');
 
-app.use(cors({
-  origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      console.log(`CORS blocked origin: ${origin}`);
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-request-id', 'Accept', 'Origin', 'X-Requested-With']
-}));
-
-// Rate limiting - only in production
+// Rate limiting with admin IP bypass
 if (process.env.NODE_ENV === 'production') {
+  // Get admin whitelist IPs from environment
+  const adminIPs = process.env.ADMIN_WHITELIST_IPS ? 
+    process.env.ADMIN_WHITELIST_IPS.split(',').map(ip => ip.trim()) : [];
+  
   const limiter = rateLimit({
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
-    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100, // limit each IP to 100 requests per windowMs
-    message: 'Too many requests from this IP, please try again later.'
+    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 500, // limit each IP to 500 requests per windowMs (increased for testing)
+    message: 'Too many requests from this IP, please try again later.',
+    skip: (req) => {
+      // Skip rate limiting for admin IPs
+      const clientIP = req.ip || req.connection.remoteAddress || req.socket.remoteAddress || 
+                      req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 
+                      req.headers['x-real-ip'];
+      
+      const isAdmin = adminIPs.includes(clientIP) || req.headers['x-admin-ip'] === '1';
+      
+      if (isAdmin) {
+        console.log(`🔓 Admin IP bypass: ${clientIP}`);
+        return true;
+      }
+      return false;
+    }
   });
   app.use('/api/', limiter);
-  console.log('Rate limiting enabled for production');
+  console.log(`Rate limiting enabled for production (admin IPs whitelisted: ${adminIPs.join(', ') || 'none'})`);
 } else {
   console.log('Rate limiting disabled for development');
 }

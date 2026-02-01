@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const mediaService = require('../services/mediaService');
 const { authenticate } = require('../middleware/auth');
-const { requireRole, requireAnyRole } = require('../middleware/rbac');
+const { requireRole, requireAnyRole, requireAnyPermission } = require('../middleware/rbac');
 const { validate } = require('../middleware/validation');
 const Joi = require('joi');
 
@@ -20,11 +20,11 @@ const verifyUploadSchema = Joi.object({
 /**
  * Generate presigned URL for image upload
  * POST /api/media/presigned-upload
- * Requires: Panelist role
+ * Requires: Panelist role OR nomination:create permission (for public nominations)
  */
 router.post('/presigned-upload', 
   authenticate,
-  requireAnyRole(['Panelist', 'System_Admin']),
+  requireAnyPermission(['media:upload', 'nomination:create']),
   validate(presignedUrlSchema),
   async (req, res, next) => {
     try {
@@ -51,11 +51,11 @@ router.post('/presigned-upload',
 /**
  * Verify that an uploaded file exists and is accessible
  * POST /api/media/verify-upload
- * Requires: Panelist role
+ * Requires: Panelist role OR nomination:create permission (for public nominations)
  */
 router.post('/verify-upload',
   authenticate,
-  requireAnyRole(['Panelist', 'System_Admin']),
+  requireAnyPermission(['media:upload', 'nomination:create']),
   validate(verifyUploadSchema),
   async (req, res, next) => {
     try {
@@ -93,11 +93,11 @@ router.post('/verify-upload',
 /**
  * Validate uploaded image format and integrity
  * POST /api/media/validate-image
- * Requires: Panelist role
+ * Requires: Panelist role OR nomination:create permission (for public nominations)
  */
 router.post('/validate-image',
   authenticate,
-  requireAnyRole(['Panelist', 'System_Admin']),
+  requireAnyPermission(['media:upload', 'nomination:create']),
   validate(Joi.object({
     objectKey: Joi.string().required(),
     contentType: Joi.string().valid('image/jpeg', 'image/jpg', 'image/png', 'image/webp').required()
@@ -202,7 +202,7 @@ router.get('/download/*', async (req, res, next) => {
 
     // Set CORS headers before redirecting
     const allowedOrigins = [
-      process.env.FRONTEND_URL || 'https://www.yodeco.duckdns.org',
+      process.env.FRONTEND_URL || 'https://portal.yodeco.ng',
       'http://localhost:3000',
       'https://localhost:3000'
     ];

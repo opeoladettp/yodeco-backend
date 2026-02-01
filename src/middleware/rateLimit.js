@@ -7,10 +7,10 @@ const redisService = require('../services/redisService');
 
 // Default rate limit configurations
 const DEFAULT_LIMITS = {
-  // Authentication endpoints - stricter limits
+  // Authentication endpoints - more lenient for testing
   auth: {
     windowMs: 15 * 60 * 1000, // 15 minutes
-    maxRequests: 10, // 10 requests per 15 minutes
+    maxRequests: 50, // 50 requests per 15 minutes (increased for testing)
     skipSuccessfulRequests: false,
     skipFailedRequests: false
   },

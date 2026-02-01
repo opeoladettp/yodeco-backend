@@ -66,3 +66,23 @@ Thumbs.db
 # Build directories
 dist/
 build/
+# Environment files with secrets - NEVER commit
+.env.network
+.env.production
+
+# SSL certificates
+ssl/
+*.pem
+*.key
+*.crt
+
+# Database dumps
+*.sql
+*.dump
+
+# Temporary files
+tmp/
+temp/
+
+# Deployment info with secrets
+deployment-info.txt

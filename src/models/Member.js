@@ -61,6 +61,35 @@ const memberSchema = new mongoose.Schema({
     }
   },
   
+  // Location Information
+  country: {
+    type: String,
+    required: [true, 'Country is required'],
+    default: 'Nigeria',
+    trim: true
+  },
+  
+  state: {
+    type: String,
+    required: [true, 'State is required'],
+    trim: true,
+    maxlength: [100, 'State name cannot exceed 100 characters']
+  },
+  
+  lga: {
+    type: String,
+    required: [true, 'Local Government Area is required'],
+    trim: true,
+    maxlength: [100, 'LGA name cannot exceed 100 characters']
+  },
+  
+  ward: {
+    type: String,
+    trim: true,
+    maxlength: [100, 'Ward name cannot exceed 100 characters'],
+    default: ''
+  },
+  
   // Profile Picture
   profilePicture: {
     url: {
@@ -245,7 +274,8 @@ memberSchema.methods.restore = function() {
 memberSchema.methods.updateProfile = function(updateData, updatedBy = null) {
   const allowedFields = [
     'firstName', 'lastName', 'otherNames', 'email', 
-    'phoneNumber', 'dateOfBirth', 'profilePicture'
+    'phoneNumber', 'dateOfBirth', 'profilePicture',
+    'country', 'state', 'lga', 'ward'
   ];
   
   allowedFields.forEach(field => {

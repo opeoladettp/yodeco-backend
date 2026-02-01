@@ -237,12 +237,15 @@ class VoteService {
         async () => {
           // Get regular vote counts
           const voteCounts = await Vote.getVoteCountsForAward(awardId);
+          console.log(`Vote counts for award ${awardId}:`, voteCounts);
           
           // Get bias adjustments
           const biasEntries = await VoteBias.getActiveBiasForAward(awardId);
+          console.log(`Bias entries for award ${awardId}:`, biasEntries);
           
           // Apply bias to vote counts
           const adjustedCounts = this.applyBiasToVoteCounts(voteCounts, biasEntries);
+          console.log(`Adjusted counts for award ${awardId}:`, adjustedCounts);
           
           return adjustedCounts;
         },
@@ -274,45 +277,56 @@ class VoteService {
 
   /**
    * Apply bias adjustments to vote counts
+   * Bias is ADDED to the actual vote count for display
    * @param {Array} voteCounts - Original vote counts from database
    * @param {Array} biasEntries - Active bias entries for the award
-   * @returns {Array} Adjusted vote counts with bias applied
+   * @returns {Array} Vote counts with bias added
    * @private
    */
   applyBiasToVoteCounts(voteCounts, biasEntries) {
+    console.log('=== applyBiasToVoteCounts START ===');
+    console.log('voteCounts:', JSON.stringify(voteCounts, null, 2));
+    console.log('biasEntries:', JSON.stringify(biasEntries, null, 2));
+    
     // Create a map of nominee IDs to vote counts
     const countsMap = new Map();
     
-    // Initialize with original vote counts
+    // Initialize with original vote counts - CONVERT ALL IDs TO STRINGS
     voteCounts.forEach(count => {
-      countsMap.set(count.nomineeId, {
-        nomineeId: count.nomineeId,
+      const nomineeIdStr = count.nomineeId.toString();  // Convert to string
+      countsMap.set(nomineeIdStr, {
+        nomineeId: nomineeIdStr,  // Store as string
         nomineeName: count.nomineeName,
-        count: count.count,
-        originalCount: count.count,
+        count: count.count,  // Actual vote count
         biasAmount: 0,
         hasBias: false
       });
     });
     
-    // Apply bias adjustments
+    console.log('countsMap after initialization:', Array.from(countsMap.entries()));
+    
+    // Add bias to vote counts
     biasEntries.forEach(bias => {
       const nomineeId = bias.nomineeId.toString();
+      console.log(`Processing bias for nominee ${nomineeId}, amount: ${bias.biasAmount}`);
+      console.log(`countsMap.has(${nomineeId}):`, countsMap.has(nomineeId));
       
       if (countsMap.has(nomineeId)) {
-        // Update existing nominee
+        // Update existing nominee - ADD bias to count
         const existing = countsMap.get(nomineeId);
-        existing.count += bias.biasAmount;
+        console.log(`Before: existing.count = ${existing.count}`);
+        existing.count += bias.biasAmount;  // ADD bias to the count
+        console.log(`After: existing.count = ${existing.count}`);
         existing.biasAmount = bias.biasAmount;
         existing.hasBias = true;
         existing.biasReason = bias.reason;
       } else {
-        // Add nominee that only has bias votes (no regular votes)
+        console.log(`Nominee ${nomineeId} not in countsMap, creating new entry`);
+        // Add nominee that only has bias (no regular votes)
         countsMap.set(nomineeId, {
           nomineeId: nomineeId,
           nomineeName: bias.nominee?.name || 'Unknown Nominee',
-          count: bias.biasAmount,
-          originalCount: 0,
+          count: bias.biasAmount,  // Count is just the bias amount
           biasAmount: bias.biasAmount,
           hasBias: true,
           biasReason: bias.reason
@@ -320,9 +334,12 @@ class VoteService {
       }
     });
     
-    // Convert back to array and sort by total count (descending)
-    return Array.from(countsMap.values())
-      .sort((a, b) => b.count - a.count);
+    const result = Array.from(countsMap.values()).sort((a, b) => b.count - a.count);
+    console.log('=== applyBiasToVoteCounts RESULT ===');
+    console.log(JSON.stringify(result, null, 2));
+    
+    // Convert back to array and sort by total count (including bias) descending
+    return result;
   }
 
   /**

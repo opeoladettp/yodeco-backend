@@ -333,16 +333,23 @@ class JWTService {
   setTokenCookies(res, accessToken, refreshToken) {
     const isProduction = process.env.NODE_ENV === 'production';
     
-    // For local development, set domain to allow cross-port access
+    // Configure cookie options based on environment
     const cookieOptions = {
       httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'strict' : 'lax',
+      secure: true, // Always secure for cross-subdomain cookies
+      sameSite: 'none', // Most permissive for cross-subdomain testing
     };
     
-    // In development, set domain to localhost to allow cross-port access
-    if (!isProduction) {
+    // Set domain for cookie sharing
+    if (isProduction) {
+      // In production, set domain to allow subdomain sharing for yodeco.ng
+      cookieOptions.domain = '.yodeco.ng'; // Allows sharing between portal.yodeco.ng and api.yodeco.ng
+      console.log('🍪 Setting production cookies with domain:', cookieOptions.domain);
+    } else {
+      // In development, set domain to localhost to allow cross-port access
       cookieOptions.domain = 'localhost';
+      cookieOptions.secure = false; // Allow non-HTTPS in development
+      console.log('🍪 Setting development cookies with domain:', cookieOptions.domain);
     }
     
     // Set access token cookie (15 minutes)
@@ -366,11 +373,19 @@ class JWTService {
    */
   clearTokenCookies(res) {
     const isProduction = process.env.NODE_ENV === 'production';
-    const clearOptions = {};
+    const clearOptions = {
+      secure: true,
+      sameSite: 'none'
+    };
     
-    // In development, set domain to localhost to match cookie setting
-    if (!isProduction) {
+    // Set domain to match cookie setting for proper clearing
+    if (isProduction) {
+      clearOptions.domain = '.yodeco.ng';
+      console.log('🍪 Clearing production cookies with domain:', clearOptions.domain);
+    } else {
       clearOptions.domain = 'localhost';
+      clearOptions.secure = false;
+      console.log('🍪 Clearing development cookies with domain:', clearOptions.domain);
     }
     
     res.clearCookie('accessToken', { path: '/', ...clearOptions });

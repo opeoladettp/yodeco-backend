@@ -53,13 +53,13 @@ const schemas = {
     title: Joi.string().min(1).max(150).required(),
     criteria: Joi.string().min(1).max(1000).required(),
     categoryId: Joi.string().pattern(/^[0-9a-fA-F]{24}$/).required(),
-    imageUrl: Joi.string().optional(),
-    votingStartDate: Joi.date().optional(),
-    votingEndDate: Joi.date().optional(),
+    imageUrl: Joi.string().optional().allow(''),
+    votingStartDate: Joi.date().iso().optional().allow(null, ''),
+    votingEndDate: Joi.date().iso().optional().allow(null, ''),
     isActive: Joi.boolean().optional(),
     allowPublicNomination: Joi.boolean().optional(),
-    nominationStartDate: Joi.date().optional(),
-    nominationEndDate: Joi.date().optional()
+    nominationStartDate: Joi.date().iso().optional().allow(null, ''),
+    nominationEndDate: Joi.date().iso().optional().allow(null, '')
   }),
 
   nomineeCreation: Joi.object({

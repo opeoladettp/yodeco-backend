@@ -15,74 +15,133 @@ router.get('/google',
   })
 );
 
+// Test endpoint to debug OAuth callback
+router.get('/test-callback', async (req, res) => {
+  try {
+    console.log('🧪 Test callback endpoint hit');
+    console.log('  Query parameters:', req.query);
+    console.log('  Headers:', req.headers);
+    
+    res.json({
+      message: 'Test callback endpoint working',
+      query: req.query,
+      headers: req.headers
+    });
+  } catch (error) {
+    console.error('Test callback error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Google OAuth callback route
 router.get('/google/callback',
+  (req, res, next) => {
+    console.log('🔍 OAuth callback hit - before passport middleware');
+    console.log('  Query params:', req.query);
+    console.log('  Headers:', {
+      'user-agent': req.get('User-Agent'),
+      'referer': req.get('Referer'),
+      'origin': req.get('Origin')
+    });
+    next();
+  },
   authRateLimit,
-  passport.authenticate('google', { 
-    failureRedirect: `${process.env.FRONTEND_URL}/login?error=oauth_failed`,
-    session: false // We'll use JWT instead of sessions
-  }),
+  (req, res, next) => {
+    passport.authenticate('google', { 
+      failureRedirect: `${process.env.FRONTEND_URL}/login?error=oauth_failed`,
+      session: false // We'll use JWT instead of sessions
+    })(req, res, (err) => {
+      if (err) {
+        console.error('❌ Passport authentication error:', err);
+        console.error('Error details:', {
+          message: err.message,
+          stack: err.stack,
+          name: err.name
+        });
+        
+        // Determine redirect URL for error
+        let redirectUrl = process.env.FRONTEND_URL || 'https://portal.yodeco.ng';
+        if (process.env.NODE_ENV === 'development') {
+          redirectUrl = 'http://localhost:3000';
+        }
+        
+        return res.redirect(`${redirectUrl}/login?error=passport_error&details=${encodeURIComponent(err.message)}`);
+      }
+      next();
+    });
+  },
   async (req, res) => {
     try {
+      console.log('🔍 OAuth Callback Success Handler Started');
+      console.log('  req.user exists:', !!req.user);
+      console.log('  req.user type:', typeof req.user);
+      
       const user = req.user;
       
       if (!user) {
+        console.log('❌ No user found in req.user, redirecting to user_not_found');
         return res.redirect(`${process.env.FRONTEND_URL}/login?error=user_not_found`);
       }
       
-      // Generate JWT tokens
-      const { accessToken, refreshToken } = jwtService.generateTokenPair(user);
+      console.log('✅ User found:', { id: user._id, email: user.email, name: user.name });
       
-      // Set secure httpOnly cookies
+      // Generate JWT tokens
+      console.log('🔑 Generating JWT tokens...');
+      const { accessToken, refreshToken } = jwtService.generateTokenPair(user);
+      console.log('✅ JWT tokens generated successfully');
+      console.log('  Access token length:', accessToken.length);
+      console.log('  Refresh token length:', refreshToken.length);
+      
+      // Set secure httpOnly cookies (for browsers that support cross-subdomain)
       jwtService.setTokenCookies(res, accessToken, refreshToken);
       
+      // QUICK FIX: Also pass token in URL for cross-subdomain compatibility
+      const tokenParam = encodeURIComponent(accessToken);
+      
+      console.log('🔍 OAuth Callback Debug:');
+      console.log('  Origin header:', req.get('Origin'));
+      console.log('  Referer header:', req.get('Referer'));
+      console.log('  Default FRONTEND_URL:', process.env.FRONTEND_URL);
+      console.log('  Generated access token length:', accessToken.length);
+      
       // Determine redirect URL based on environment and request context
-      let redirectUrl = process.env.FRONTEND_URL;
+      let redirectUrl = process.env.FRONTEND_URL || 'https://portal.yodeco.ng';
       
       // In development mode, always redirect to localhost
       if (process.env.NODE_ENV === 'development') {
         redirectUrl = 'http://localhost:3000';
         console.log('🔧 Development mode: Redirecting to localhost:3000');
+      } else {
+        // In production, use the configured FRONTEND_URL (should be portal.yodeco.ng)
+        redirectUrl = process.env.FRONTEND_URL || 'https://portal.yodeco.ng';
+        console.log('🌐 Production mode: Redirecting to configured frontend:', redirectUrl);
       }
       
-      // Check if request came from localhost (development)
-      const origin = req.get('Origin') || req.get('Referer');
-      if (origin && origin.includes('localhost:3000')) {
-        redirectUrl = 'http://localhost:3000';
-      }
+      const finalRedirectUrl = `${redirectUrl}/?login=success&token=${tokenParam}`;
+      console.log('🚀 Final OAuth redirect URL:', finalRedirectUrl);
       
-      // Allow override via query parameter for development
-      if (req.query.redirect_to === 'localhost') {
-        redirectUrl = 'http://localhost:3000';
-      }
-      
-      console.log('OAuth redirect URL:', redirectUrl);
-      
-      // Redirect to frontend with success
-      res.redirect(`${redirectUrl}/?login=success`);
+      // Redirect to frontend with success and token
+      res.redirect(finalRedirectUrl);
       
     } catch (error) {
-      console.error('OAuth callback error:', error);
+      console.error('❌ OAuth callback error:', error);
+      console.error('Error stack:', error.stack);
       
       // Use same logic for error redirects
-      let redirectUrl = process.env.FRONTEND_URL;
+      let redirectUrl = process.env.FRONTEND_URL || 'https://portal.yodeco.ng';
       
       // In development mode, always redirect to localhost
       if (process.env.NODE_ENV === 'development') {
         redirectUrl = 'http://localhost:3000';
-      }
-      
-      const origin = req.get('Origin') || req.get('Referer');
-      if (origin && origin.includes('localhost:3000')) {
-        redirectUrl = 'http://localhost:3000';
-      }
-      if (req.query.redirect_to === 'localhost') {
-        redirectUrl = 'http://localhost:3000';
+      } else {
+        // In production, use the configured FRONTEND_URL (should be portal.yodeco.ng)
+        redirectUrl = process.env.FRONTEND_URL || 'https://portal.yodeco.ng';
+        console.log('🌐 Production error redirect to:', redirectUrl);
       }
       
       console.log('OAuth error redirect URL:', redirectUrl);
       
-      res.redirect(`${redirectUrl}/login?error=server_error`);
+      res.redirect(`${redirectUrl}/login?error=server_error&details=${encodeURIComponent(error.message)}`);
     }
   }
 );
@@ -116,8 +175,11 @@ router.post('/refresh', authRateLimit, authenticateRefreshToken, async (req, res
     // Set new secure cookies
     jwtService.setTokenCookies(res, accessToken, refreshToken);
     
+    console.log(`✅ Token refreshed for user: ${user.email}`);
+    
     res.json({
       message: 'Tokens refreshed successfully',
+      accessToken,  // Also return in response body for localStorage fallback
       user: {
         id: user._id,
         email: user.email,
@@ -269,8 +331,19 @@ router.post('/logout', async (req, res) => {
 // Get current user profile
 router.get('/me', async (req, res) => {
   try {
-    // Extract token from cookies
-    const accessToken = req.cookies.accessToken;
+    // Extract token from cookies OR Authorization header (fallback for cross-subdomain issues)
+    let accessToken = req.cookies.accessToken;
+    
+    // If no cookie token, try Authorization header
+    if (!accessToken) {
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        accessToken = authHeader.substring(7);
+        console.log('🔑 Using token from Authorization header (cross-subdomain fallback)');
+      }
+    } else {
+      console.log('🍪 Using token from cookies');
+    }
     
     if (!accessToken) {
       return res.status(401).json({
