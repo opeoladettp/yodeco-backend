@@ -39,7 +39,9 @@ if (process.env.NODE_ENV === 'production' && process.env.RAILWAY_ENVIRONMENT) {
       'Accept',
       'Authorization',
       'Cache-Control',
-      'X-Admin-IP'
+      'X-Admin-IP',
+      'X-Request-ID',
+      'x-request-id'
     ],
     exposedHeaders: ['set-cookie'],
     optionsSuccessStatus: 200
