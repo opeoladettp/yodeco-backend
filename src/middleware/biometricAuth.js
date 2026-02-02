@@ -34,9 +34,9 @@ const requireBiometricVerification = async (req, res, next) => {
       });
     }
 
-    // Check for biometric verification header
+    // Check for biometric verification header (support both old and new header names)
     // In a real implementation, this would verify a temporary verification token
-    const biometricVerified = req.headers['x-biometric-verified'];
+    const biometricVerified = req.headers['x-biometric-verified'] || req.headers['biometric-verified'];
     if (!biometricVerified || biometricVerified !== 'true') {
       return res.status(428).json({
         error: {
