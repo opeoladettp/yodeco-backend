@@ -15,6 +15,11 @@ const backgroundJobs = require('./services/backgroundJobs');
 
 const app = express();
 
+// Trust proxy for Railway deployment
+if (process.env.NODE_ENV === 'production' && process.env.RAILWAY_ENVIRONMENT) {
+  app.set('trust proxy', true);
+}
+
 // Security middleware
 app.use(helmet());
 
@@ -24,21 +29,49 @@ if (process.env.NODE_ENV === 'production' && process.env.RAILWAY_ENVIRONMENT) {
   const cors = require('cors');
   
   const corsOptions = {
-    origin: [
-      'https://portal.yodeco.ng',
-      'https://yodeco-frontend.vercel.app',
-      'http://localhost:3000',
-      'http://localhost:3001'
-    ],
+    origin: function (origin, callback) {
+      const allowedOrigins = [
+        'https://portal.yodeco.ng',
+        'https://yodeco-frontend.vercel.app',
+        'http://localhost:3000',
+        'http://localhost:3001'
+      ];
+      
+      // Allow requests with no origin (like mobile apps or curl)
+      if (!origin) return callback(null, true);
+      
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.log('🚫 CORS blocked origin:', origin);
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
     allowedHeaders: '*',
     exposedHeaders: ['set-cookie'],
-    optionsSuccessStatus: 200
+    optionsSuccessStatus: 200,
+    preflightContinue: false
   };
   
   app.use(cors(corsOptions));
-  console.log('CORS configured for Railway deployment');
+  
+  // Add explicit OPTIONS handler for debugging
+  app.options('*', (req, res) => {
+    console.log('🔍 OPTIONS request received:', {
+      origin: req.headers.origin,
+      method: req.headers['access-control-request-method'],
+      headers: req.headers['access-control-request-headers']
+    });
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS,PATCH');
+    res.header('Access-Control-Allow-Headers', '*');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    res.sendStatus(200);
+  });
+  
+  console.log('CORS configured for Railway deployment with explicit OPTIONS handler');
 } else {
   // EC2 deployment - CORS handled by nginx
   console.log('CORS handling delegated to nginx proxy');
