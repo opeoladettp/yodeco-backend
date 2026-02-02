@@ -18,8 +18,39 @@ const app = express();
 // Security middleware
 app.use(helmet());
 
-// CORS is handled by nginx proxy - no CORS middleware needed in Express
-console.log('CORS handling delegated to nginx proxy');
+// CORS configuration for Railway deployment
+if (process.env.NODE_ENV === 'production' && process.env.RAILWAY_ENVIRONMENT) {
+  // Railway deployment - handle CORS in Express
+  const cors = require('cors');
+  
+  const corsOptions = {
+    origin: [
+      'https://portal.yodeco.ng',
+      'https://yodeco-frontend.vercel.app',
+      'http://localhost:3000',
+      'http://localhost:3001'
+    ],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: [
+      'Origin',
+      'X-Requested-With', 
+      'Content-Type',
+      'Accept',
+      'Authorization',
+      'Cache-Control',
+      'X-Admin-IP'
+    ],
+    exposedHeaders: ['set-cookie'],
+    optionsSuccessStatus: 200
+  };
+  
+  app.use(cors(corsOptions));
+  console.log('CORS configured for Railway deployment');
+} else {
+  // EC2 deployment - CORS handled by nginx
+  console.log('CORS handling delegated to nginx proxy');
+}
 
 // Rate limiting with admin IP bypass
 if (process.env.NODE_ENV === 'production') {
@@ -81,6 +112,29 @@ app.use(errorMonitoring);
 
 // Error handling middleware
 app.use(errorHandler);
+
+// Temporary IP detection endpoint for Railway
+app.get('/api/my-ip', (req, res) => {
+  const clientIP = req.headers['x-forwarded-for'] || 
+                   req.headers['x-real-ip'] || 
+                   req.connection.remoteAddress || 
+                   req.socket.remoteAddress ||
+                   (req.connection.socket ? req.connection.socket.remoteAddress : null);
+  
+  res.json({
+    success: true,
+    data: {
+      clientIP: clientIP,
+      headers: {
+        'x-forwarded-for': req.headers['x-forwarded-for'],
+        'x-real-ip': req.headers['x-real-ip'],
+        'cf-connecting-ip': req.headers['cf-connecting-ip'],
+        'x-forwarded-proto': req.headers['x-forwarded-proto']
+      },
+      timestamp: new Date().toISOString()
+    }
+  });
+});
 
 // 404 handler
 app.use('*', (req, res) => {
