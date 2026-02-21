@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth } = require('../middleware/auth');
+const { authenticate } = require('../middleware/auth');
 const { requireRole } = require('../middleware/rbac');
 const { 
   getBlockedIPs, 
@@ -14,7 +14,7 @@ const {
  * @desc    Get all blocked IPs (System Admin only)
  * @access  Private (System Admin)
  */
-router.get('/blocked-ips', requireAuth, requireRole('System_Admin'), async (req, res) => {
+router.get('/blocked-ips', authenticate, requireRole('System_Admin'), async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
     const blockedIPs = await getBlockedIPs(limit);
@@ -44,7 +44,7 @@ router.get('/blocked-ips', requireAuth, requireRole('System_Admin'), async (req,
  * @desc    Unblock a specific IP address (System Admin only)
  * @access  Private (System Admin)
  */
-router.post('/unblock/:ip', requireAuth, requireRole('System_Admin'), async (req, res) => {
+router.post('/unblock/:ip', authenticate, requireRole('System_Admin'), async (req, res) => {
   try {
     const { ip } = req.params;
     
@@ -91,7 +91,7 @@ router.post('/unblock/:ip', requireAuth, requireRole('System_Admin'), async (req
  * @desc    Unblock multiple IP addresses (System Admin only)
  * @access  Private (System Admin)
  */
-router.post('/unblock-multiple', requireAuth, requireRole('System_Admin'), async (req, res) => {
+router.post('/unblock-multiple', authenticate, requireRole('System_Admin'), async (req, res) => {
   try {
     const { ips } = req.body;
     
@@ -142,7 +142,7 @@ router.post('/unblock-multiple', requireAuth, requireRole('System_Admin'), async
  * @desc    Get rate limit statistics (System Admin only)
  * @access  Private (System Admin)
  */
-router.get('/stats', requireAuth, requireRole('System_Admin'), async (req, res) => {
+router.get('/stats', authenticate, requireRole('System_Admin'), async (req, res) => {
   try {
     const stats = await getRateLimitStats();
     
@@ -170,7 +170,7 @@ router.get('/stats', requireAuth, requireRole('System_Admin'), async (req, res) 
  * @desc    Clear all rate limits (System Admin only - use with caution)
  * @access  Private (System Admin)
  */
-router.delete('/clear-all', requireAuth, requireRole('System_Admin'), async (req, res) => {
+router.delete('/clear-all', authenticate, requireRole('System_Admin'), async (req, res) => {
   try {
     const redisService = require('../services/redisService');
     const client = redisService.getClient();
