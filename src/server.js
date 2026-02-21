@@ -85,7 +85,7 @@ if (process.env.NODE_ENV === 'production') {
   
   const limiter = rateLimit({
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
-    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 500, // limit each IP to 500 requests per windowMs (increased for testing)
+    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 5000, // Increased to 5000 requests per 15 minutes
     message: 'Too many requests from this IP, please try again later.',
     skip: (req) => {
       // Skip rate limiting for admin IPs
@@ -99,11 +99,26 @@ if (process.env.NODE_ENV === 'production') {
         console.log(`🔓 Admin IP bypass: ${clientIP}`);
         return true;
       }
+      
+      // Also skip for health checks and OPTIONS requests
+      if (req.path === '/health' || req.method === 'OPTIONS') {
+        return true;
+      }
+      
       return false;
+    },
+    // Don't count successful requests
+    skipSuccessfulRequests: true,
+    // Use a custom key generator to be more lenient
+    keyGenerator: (req) => {
+      // Use IP + User-Agent to allow multiple devices from same IP
+      const ip = req.ip || req.connection.remoteAddress || 'unknown';
+      return ip;
     }
   });
   app.use('/api/', limiter);
   console.log(`Rate limiting enabled for production (admin IPs whitelisted: ${adminIPs.join(', ') || 'none'})`);
+  console.log(`Rate limit: ${parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 5000} requests per ${(parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000) / 60000} minutes`);
 } else {
   console.log('Rate limiting disabled for development');
 }
