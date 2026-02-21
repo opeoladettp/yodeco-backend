@@ -11,6 +11,7 @@ const mediaRoutes = require('./media');
 const webauthnRoutes = require('./webauthn');
 const healthRoutes = require('./health');
 const memberRoutes = require('./members');
+const rateLimitRoutes = require('./rateLimit');
 
 // Route mounting
 router.use('/auth', authRoutes);
@@ -22,6 +23,7 @@ router.use('/media', mediaRoutes);
 router.use('/webauthn', webauthnRoutes);
 router.use('/health', healthRoutes);
 router.use('/members', memberRoutes);
+router.use('/rate-limit', rateLimitRoutes);
 
 // Placeholder route
 router.get('/', (req, res) => {

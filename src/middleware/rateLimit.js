@@ -64,6 +64,12 @@ function createRateLimit(options = {}) {
 
   return async (req, res, next) => {
     try {
+      // Skip rate limiting for System Admins
+      if (req.user && req.user.role === 'System_Admin') {
+        console.log(`🔓 System Admin bypass: ${req.user.email || req.user.id}`);
+        return next();
+      }
+
       // Generate rate limit key
       const key = config.keyGenerator(req);
       
@@ -75,6 +81,9 @@ function createRateLimit(options = {}) {
       
       // Check if limit exceeded
       if (result.exceeded) {
+        // Log blocked IP for admin review
+        await logBlockedIP(req, key, result);
+        
         // Call onLimitReached callback
         config.onLimitReached(req, res, result);
         
@@ -425,6 +434,171 @@ async function clearRateLimit(key) {
   }
 }
 
+/**
+ * Log blocked IP for admin review
+ * @param {Object} req - Express request object
+ * @param {string} key - Rate limit key
+ * @param {Object} result - Rate limit result
+ */
+async function logBlockedIP(req, key, result) {
+  try {
+    const client = redisService.getClient();
+    const ip = req.ip || req.connection.remoteAddress || 'unknown';
+    const userId = req.user?.id || req.user?._id || 'anonymous';
+    
+    const blockInfo = {
+      ip,
+      userId,
+      key,
+      count: result.count,
+      limit: result.maxRequests,
+      endpoint: req.path,
+      method: req.method,
+      userAgent: req.get('User-Agent'),
+      timestamp: new Date().toISOString(),
+      resetTime: result.resetTime
+    };
+    
+    // Store in Redis sorted set with timestamp as score
+    const blockKey = `blocked_ips:${ip}`;
+    await client.zAdd(blockKey, {
+      score: Date.now(),
+      value: JSON.stringify(blockInfo)
+    });
+    
+    // Keep only last 100 blocks per IP
+    await client.zRemRangeByRank(blockKey, 0, -101);
+    
+    // Set expiration for 7 days
+    await client.expire(blockKey, 7 * 24 * 60 * 60);
+    
+    // Also add to global blocked IPs list
+    await client.zAdd('blocked_ips:all', {
+      score: Date.now(),
+      value: ip
+    });
+    
+    // Keep only last 1000 blocked IPs
+    await client.zRemRangeByRank('blocked_ips:all', 0, -1001);
+  } catch (error) {
+    console.error('Error logging blocked IP:', error);
+  }
+}
+
+/**
+ * Get all blocked IPs with their details
+ * @param {number} limit - Maximum number of IPs to return
+ * @returns {Array} Array of blocked IP information
+ */
+async function getBlockedIPs(limit = 100) {
+  try {
+    const client = redisService.getClient();
+    
+    // Get all unique blocked IPs
+    const blockedIPs = await client.zRange('blocked_ips:all', 0, -1);
+    
+    const results = [];
+    for (const ip of blockedIPs.slice(0, limit)) {
+      const blockKey = `blocked_ips:${ip}`;
+      const blocks = await client.zRange(blockKey, -10, -1); // Get last 10 blocks
+      
+      if (blocks.length > 0) {
+        const latestBlock = JSON.parse(blocks[blocks.length - 1]);
+        results.push({
+          ip,
+          totalBlocks: blocks.length,
+          latestBlock,
+          allBlocks: blocks.map(b => JSON.parse(b))
+        });
+      }
+    }
+    
+    // Sort by most recent block
+    results.sort((a, b) => 
+      new Date(b.latestBlock.timestamp) - new Date(a.latestBlock.timestamp)
+    );
+    
+    return results;
+  } catch (error) {
+    console.error('Error getting blocked IPs:', error);
+    return [];
+  }
+}
+
+/**
+ * Clear all rate limits for a specific IP
+ * @param {string} ip - IP address to unblock
+ * @returns {Object} Result with success status and cleared keys
+ */
+async function unblockIP(ip) {
+  try {
+    const client = redisService.getClient();
+    
+    // Find all rate limit keys for this IP
+    const pattern = `rate_limit:*${ip}*`;
+    const keys = await client.keys(pattern);
+    
+    let clearedCount = 0;
+    for (const key of keys) {
+      const result = await client.del(key);
+      if (result > 0) clearedCount++;
+    }
+    
+    // Remove from blocked IPs list
+    await client.zRem('blocked_ips:all', ip);
+    await client.del(`blocked_ips:${ip}`);
+    
+    return {
+      success: true,
+      ip,
+      clearedKeys: clearedCount,
+      message: `Unblocked IP ${ip} and cleared ${clearedCount} rate limit keys`
+    };
+  } catch (error) {
+    console.error('Error unblocking IP:', error);
+    return {
+      success: false,
+      ip,
+      error: error.message
+    };
+  }
+}
+
+/**
+ * Get rate limit statistics
+ * @returns {Object} Rate limit statistics
+ */
+async function getRateLimitStats() {
+  try {
+    const client = redisService.getClient();
+    
+    // Get all rate limit keys
+    const rateLimitKeys = await client.keys('rate_limit:*');
+    const blockedIPsCount = await client.zCard('blocked_ips:all');
+    
+    // Count by type
+    const stats = {
+      totalRateLimits: rateLimitKeys.length,
+      totalBlockedIPs: blockedIPsCount,
+      byType: {
+        auth: rateLimitKeys.filter(k => k.includes(':auth:')).length,
+        vote: rateLimitKeys.filter(k => k.includes(':vote:')).length,
+        webauthn: rateLimitKeys.filter(k => k.includes(':webauthn:')).length,
+        general: rateLimitKeys.filter(k => k.includes(':general:')).length
+      }
+    };
+    
+    return stats;
+  } catch (error) {
+    console.error('Error getting rate limit stats:', error);
+    return {
+      totalRateLimits: 0,
+      totalBlockedIPs: 0,
+      byType: {}
+    };
+  }
+}
+
 module.exports = {
   createRateLimit,
   authRateLimit,
@@ -435,5 +609,9 @@ module.exports = {
   rateLimitCleanup,
   getRateLimitStatus,
   clearRateLimit,
+  logBlockedIP,
+  getBlockedIPs,
+  unblockIP,
+  getRateLimitStats,
   DEFAULT_LIMITS
 };
