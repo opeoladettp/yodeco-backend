@@ -184,6 +184,46 @@ router.get('/my-history',
 );
 
 /**
+ * GET /api/votes/counts - Get vote counts for all nominees across all awards
+ * Public endpoint (no authentication required)
+ */
+router.get('/counts', async (req, res) => {
+  try {
+    const Vote = require('../models/Vote');
+    
+    // Aggregate vote counts by nominee
+    const voteCounts = await Vote.aggregate([
+      {
+        $group: {
+          _id: '$nomineeId',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    res.json({
+      success: true,
+      voteCounts: voteCounts.map(item => ({
+        nomineeId: item._id.toString(),
+        count: item.count
+      })),
+      totalVotes: voteCounts.reduce((sum, item) => sum + item.count, 0),
+      lastUpdated: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('Error getting vote counts:', error);
+    res.status(500).json({
+      error: {
+        code: 'COUNT_RETRIEVAL_ERROR',
+        message: 'Failed to retrieve vote counts',
+        retryable: true
+      }
+    });
+  }
+});
+
+/**
  * GET /api/votes/counts/:awardId - Get real-time vote counts for an award
  * Public endpoint (no authentication required)
  */
