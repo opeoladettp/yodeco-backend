@@ -184,12 +184,13 @@ router.get('/my-history',
 );
 
 /**
- * GET /api/votes/counts - Get vote counts for all nominees across all awards
+ * GET /api/votes/counts - Get vote counts for all nominees across all awards (with bias)
  * Public endpoint (no authentication required)
  */
 router.get('/counts', async (req, res) => {
   try {
     const Vote = require('../models/Vote');
+    const VoteBias = require('../models/VoteBias');
     
     // Aggregate vote counts by nominee
     const voteCounts = await Vote.aggregate([
@@ -201,13 +202,48 @@ router.get('/counts', async (req, res) => {
       }
     ]);
 
+    // Get all active bias entries
+    const biasEntries = await VoteBias.find({ isActive: true });
+
+    // Create a map of nominee IDs to vote counts
+    const countsMap = new Map();
+    
+    // Initialize with original vote counts
+    voteCounts.forEach(count => {
+      const nomineeIdStr = count._id.toString();
+      countsMap.set(nomineeIdStr, {
+        nomineeId: nomineeIdStr,
+        count: count.count
+      });
+    });
+    
+    // Apply bias to vote counts
+    biasEntries.forEach(bias => {
+      const nomineeId = bias.nomineeId.toString();
+      
+      if (countsMap.has(nomineeId)) {
+        // Add bias to existing nominee
+        const existing = countsMap.get(nomineeId);
+        existing.count += bias.biasAmount;
+      } else {
+        // Create entry for nominee with only bias (no actual votes)
+        countsMap.set(nomineeId, {
+          nomineeId: nomineeId,
+          count: bias.biasAmount
+        });
+      }
+    });
+
+    // Convert map to array
+    const result = Array.from(countsMap.values());
+
     res.json({
       success: true,
-      voteCounts: voteCounts.map(item => ({
-        nomineeId: item._id.toString(),
+      voteCounts: result.map(item => ({
+        nomineeId: item.nomineeId,
         count: item.count
       })),
-      totalVotes: voteCounts.reduce((sum, item) => sum + item.count, 0),
+      totalVotes: result.reduce((sum, item) => sum + item.count, 0),
       lastUpdated: new Date().toISOString()
     });
 
