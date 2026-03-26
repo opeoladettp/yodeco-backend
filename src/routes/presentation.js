@@ -8,8 +8,21 @@ const Vote = require('../models/Vote');
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-function slugify(str) {
-  return String(str || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+/** Recursively convert ObjectIds and Dates to plain strings/values */
+function sanitize(obj) {
+  if (obj === null || obj === undefined) return obj;
+  if (typeof obj.toHexString === 'function') return obj.toHexString(); // ObjectId
+  if (obj instanceof Date) return obj.toISOString();
+  if (Array.isArray(obj)) return obj.map(sanitize);
+  if (typeof obj === 'object') {
+    const out = {};
+    for (const k of Object.keys(obj)) {
+      if (k === '__v' || k === '__t') continue; // skip mongoose internals
+      out[k] = sanitize(obj[k]);
+    }
+    return out;
+  }
+  return obj;
 }
 
 /** Download a URL and return a Buffer, or null on failure */
@@ -118,7 +131,7 @@ router.get('/download', authenticate, async (req, res) => {
     });
 
     // Add presentation.js (data + logic)
-    archive.append(buildJS(data), { name: 'presentation.js' });
+    archive.append(buildJS(sanitize(data)), { name: 'presentation.js' });
 
     // Add presentation.css
     archive.append(buildCSS(), { name: 'presentation.css' });
