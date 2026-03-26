@@ -305,7 +305,7 @@ function esc(s) {
 
 function imgTag(localImage, alt, cls) {
   if (!localImage) return '<div class="' + cls + '">&#128100;</div>';
-  return '<img src="' + localImage + '" alt="' + esc(alt) + '" onerror="this.parentElement.innerHTML=\'<div class=\\\\\'' + cls + '\\\\\'> &#128100;</div>\'">';
+  return '<img src="' + localImage + '" alt="' + esc(alt) + '" onerror="this.style.display=\'none\'">';
 }
 
 function buildSlide(s) {
