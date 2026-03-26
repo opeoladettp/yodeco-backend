@@ -227,20 +227,20 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Segoe 
 
 /* nominees */
 .slide-nominees{justify-content:flex-start;padding-top:2rem}
-.nominees-header{margin-bottom:2rem;text-align:center}
+.nominees-header{margin-bottom:1.5rem;text-align:center}
 .nominees-badge{background:rgba(57,130,19,.3);border:1px solid var(--green);color:var(--green);padding:.3rem 1rem;border-radius:20px;font-size:.8rem;font-weight:700;letter-spacing:2px;text-transform:uppercase;display:inline-block;margin-bottom:.75rem}
 .nominees-award-title{font-size:clamp(1.2rem,3vw,2rem);font-weight:700;color:#fff}
-.nominees-grid{display:grid;gap:1.5rem;width:100%;max-width:1100px}
-.nominees-grid.n1{grid-template-columns:1fr;max-width:320px}
-.nominees-grid.n2{grid-template-columns:repeat(2,1fr)}
+.nominees-grid{display:grid;gap:1.5rem;width:100%;max-width:1100px;max-height:72vh}
+.nominees-grid.n1{grid-template-columns:1fr;max-width:280px}
+.nominees-grid.n2{grid-template-columns:repeat(2,1fr);max-width:600px}
 .nominees-grid.n3{grid-template-columns:repeat(3,1fr)}
-.nominees-grid.n4,.nominees-grid.n5,.nominees-grid.n6{grid-template-columns:repeat(4,1fr)}
-.nominee-card{background:var(--surface);border:1px solid var(--border);border-radius:16px;overflow:hidden;display:flex;flex-direction:column;transition:transform .2s}
+.nominees-grid.n4{grid-template-columns:repeat(4,1fr)}
+.nominee-card{background:var(--surface);border:1px solid var(--border);border-radius:16px;overflow:hidden;display:flex;flex-direction:column;transition:transform .2s;max-height:72vh}
 .nominee-card:hover{transform:translateY(-4px)}
-.nominee-img-wrap{aspect-ratio:1;overflow:hidden;background:rgba(57,130,19,.1)}
+.nominee-img-wrap{flex:1;min-height:0;overflow:hidden;background:rgba(57,130,19,.1);max-height:55vh}
 .nominee-img-wrap img{width:100%;height:100%;object-fit:cover}
-.nominee-placeholder{width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.3);font-size:3rem}
-.nominee-info{padding:.75rem;text-align:center}
+.nominee-placeholder{width:100%;height:100%;min-height:80px;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.3);font-size:3rem}
+.nominee-info{padding:.75rem;text-align:center;flex-shrink:0}
 .nominee-name{font-size:clamp(.8rem,1.5vw,1rem);font-weight:700;color:#fff;line-height:1.3}
 .nominee-votes{font-size:.8rem;color:var(--gold);margin-top:.25rem}
 .page-label{font-size:.85rem;color:var(--gold);font-weight:400;margin-left:.5rem}
