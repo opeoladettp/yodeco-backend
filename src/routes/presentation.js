@@ -243,6 +243,11 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Segoe 
 .nominee-info{padding:.75rem;text-align:center}
 .nominee-name{font-size:clamp(.8rem,1.5vw,1rem);font-weight:700;color:#fff;line-height:1.3}
 .nominee-votes{font-size:.8rem;color:var(--gold);margin-top:.25rem}
+.page-label{font-size:.85rem;color:var(--gold);font-weight:400;margin-left:.5rem}
+
+/* no-nominees */
+.slide-no-nominees{background:linear-gradient(135deg,rgba(193,158,51,.1) 0%,rgba(57,130,19,.08) 100%)}
+.no-nominees-msg{font-size:1.3rem;color:var(--text-muted);margin:1.5rem 0;padding:1rem 2rem;border:1px dashed var(--border);border-radius:12px}
 
 /* winner */
 .slide-winner{background:linear-gradient(135deg,rgba(193,158,51,.2) 0%,rgba(57,130,19,.15) 100%)}
@@ -278,14 +283,23 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Segoe 
 }
 
 function buildJS(data) {
-  // Build flat slides array
+  // Build flat slides array — nominees chunked into pages of 4
+  const NOMINEES_PER_PAGE = 4;
   const slides = [];
   data.forEach(category => {
     slides.push({ type: 'category', category });
     category.awards.forEach(award => {
       slides.push({ type: 'award', category, award });
-      if (award.nominees.length > 0) {
-        slides.push({ type: 'nominees', category, award, nominees: award.nominees });
+      if (award.nominees.length === 0) {
+        slides.push({ type: 'no-nominees', category, award });
+      } else {
+        // chunk nominees into pages of 4
+        for (var i = 0; i < award.nominees.length; i += NOMINEES_PER_PAGE) {
+          var chunk = award.nominees.slice(i, i + NOMINEES_PER_PAGE);
+          var page = Math.floor(i / NOMINEES_PER_PAGE) + 1;
+          var totalPages = Math.ceil(award.nominees.length / NOMINEES_PER_PAGE);
+          slides.push({ type: 'nominees', category, award, nominees: chunk, page: page, totalPages: totalPages });
+        }
       }
       if (award.winner) {
         slides.push({ type: 'winner', category, award, winner: award.winner });
@@ -325,9 +339,18 @@ function buildSlide(s) {
       '<div class="award-category-tag">' + esc(s.category.name) + '</div>' +
       '</div>';
   }
+  if (s.type === 'no-nominees') {
+    return '<div class="slide-inner slide-no-nominees">' +
+      '<div class="award-badge">Award</div>' +
+      '<h1 class="award-title">' + esc(s.award.title) + '</h1>' +
+      '<div class="no-nominees-msg">&#128683; No nominations received for this award</div>' +
+      '<div class="award-category-tag">' + esc(s.category.name) + '</div>' +
+      '</div>';
+  }
   if (s.type === 'nominees') {
-    const n = Math.min(s.nominees.length, 6);
-    const cards = s.nominees.map(function(nom) {
+    var pageLabel = s.totalPages > 1 ? ' <span class="page-label">(' + s.page + ' / ' + s.totalPages + ')</span>' : '';
+    var n = s.nominees.length;
+    var cards = s.nominees.map(function(nom) {
       return '<div class="nominee-card">' +
         '<div class="nominee-img-wrap">' + imgTag(nom.localImage, nom.name, 'nominee-placeholder') + '</div>' +
         '<div class="nominee-info">' +
@@ -339,7 +362,7 @@ function buildSlide(s) {
     return '<div class="slide-inner slide-nominees">' +
       '<div class="nominees-header">' +
         '<div class="nominees-badge">Nominees</div>' +
-        '<h2 class="nominees-award-title">' + esc(s.award.title) + '</h2>' +
+        '<h2 class="nominees-award-title">' + esc(s.award.title) + pageLabel + '</h2>' +
       '</div>' +
       '<div class="nominees-grid n' + n + '">' + cards + '</div>' +
       '</div>';
