@@ -68,8 +68,12 @@ router.get('/download', authenticate, async (req, res) => {
     const imageMap = {};
 
     const data = categories.map(cat => {
+      const catId = cat._id.toString();
       const catAwards = awards
-        .filter(a => a.categoryId?.toString() === cat._id.toString())
+        .filter(a => {
+          const awardCatId = a.categoryId ? a.categoryId.toString() : '';
+          return awardCatId === catId;
+        })
         .map(award => {
           const nominees = (award.nominees || []).map(n => {
             const votes = voteMap[n._id.toString()] || 0;
@@ -98,6 +102,8 @@ router.get('/download', authenticate, async (req, res) => {
     );
 
     // ── 4. Stream ZIP ──────────────────────────────────────────────────────
+    console.log(`[Presentation] categories=${categories.length} awards=${awards.length} slides data=${data.length} images=${imageEntries.length}`);
+    data.forEach(c => console.log(`  Category: ${c.name} → ${c.awards.length} awards`));
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', 'attachment; filename="yodeco-awards-presentation.zip"');
 
@@ -383,6 +389,11 @@ document.addEventListener('keydown', function(e) {
   if (e.key === 'f' || e.key === 'F') toggleFullscreen();
 });
 
-render(0);
+if (SLIDES.length > 0) {
+  render(0);
+} else {
+  document.getElementById('slide').innerHTML = '<div style="color:#fff;font-size:2rem;text-align:center;padding:3rem">No presentation data found.</div>';
+  document.getElementById('slide-counter').textContent = '0 / 0';
+}
 `;
 }
