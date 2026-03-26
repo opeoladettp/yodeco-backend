@@ -131,7 +131,9 @@ router.get('/download', authenticate, async (req, res) => {
     });
 
     // Add presentation.js (data + logic)
-    archive.append(buildJS(sanitize(data)), { name: 'presentation.js' });
+    // JSON.parse(JSON.stringify(...)) strips all Mongoose ObjectIds/Dates to plain values
+    const plainData = JSON.parse(JSON.stringify(data));
+    archive.append(buildJS(plainData), { name: 'presentation.js' });
 
     // Add presentation.css
     archive.append(buildCSS(), { name: 'presentation.css' });
