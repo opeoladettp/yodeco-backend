@@ -52,10 +52,12 @@ router.get('/download', authenticate, async (req, res) => {
 
     // ── 1. Fetch data ──────────────────────────────────────────────────────
     const categories = await Category.find({ isActive: true }).sort({ createdAt: 1 }).lean();
-    const awards = await Award.find({ isActive: true })
+
+    // nominees is a virtual on Award — must NOT use .lean() so virtuals are populated
+    const awardsRaw = await Award.find({ isActive: true })
       .populate({ path: 'nominees', match: { isActive: true, approvalStatus: 'approved' }, select: 'name bio imageUrl' })
-      .sort({ createdAt: 1 })
-      .lean();
+      .sort({ createdAt: 1 });
+    const awards = awardsRaw.map(a => a.toObject({ virtuals: true }));
 
     const voteCounts = await Vote.aggregate([{ $group: { _id: '$nomineeId', count: { $sum: 1 } } }]);
     const voteMap = {};
