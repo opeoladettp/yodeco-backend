@@ -28,13 +28,27 @@ function sanitize(obj) {
 /** Download a URL and return a Buffer, or null on failure */
 async function fetchImage(url) {
   try {
-    const res = await fetch(url, { timeout: 10000 });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
     if (!res.ok) return null;
     const buf = await res.buffer();
     return buf;
   } catch {
     return null;
   }
+}
+
+/** Fetch images in small concurrent batches to avoid memory/connection exhaustion */
+async function fetchImagesBatched(entries, batchSize) {
+  const results = new Array(entries.length).fill(null);
+  for (let i = 0; i < entries.length; i += batchSize) {
+    const batch = entries.slice(i, i + batchSize);
+    const buffers = await Promise.all(batch.map(([, url]) => fetchImage(url)));
+    buffers.forEach((buf, j) => { results[i + j] = buf; });
+  }
+  return results;
 }
 
 /** Resolve nominee imageUrl to a full HTTP URL */
@@ -76,10 +90,9 @@ router.get('/download', authenticate, async (req, res) => {
     const voteMap = {};
     voteCounts.forEach(v => { voteMap[v._id.toString()] = v.count; });
 
-    // ── 2. Build slide data + collect image URLs ───────────────────────────
-    // imageMap: localPath → remoteUrl
-    const imageMap = {};
-
+    // ── 2. Build slide data ────────────────────────────────────────────────
+    // Use remote CDN/S3 URLs directly — skip image bundling to avoid
+    // memory exhaustion from downloading 100+ images concurrently.
     const data = categories.map(cat => {
       const catId = cat._id.toString();
       const catAwards = awards
@@ -91,14 +104,7 @@ router.get('/download', authenticate, async (req, res) => {
           const nominees = (award.nominees || []).map(n => {
             const votes = voteMap[n._id.toString()] || 0;
             const remoteUrl = resolveImageUrl(n.imageUrl);
-            let localPath = null;
-            if (remoteUrl) {
-              // derive a safe filename from the URL
-              const filename = remoteUrl.split('/').pop().split('?')[0] || `${n._id}.jpg`;
-              localPath = `images/${filename}`;
-              imageMap[localPath] = remoteUrl;
-            }
-            return { id: String(n._id), name: n.name, bio: n.bio || '', localImage: localPath, votes };
+            return { id: String(n._id), name: n.name, bio: n.bio || '', localImage: remoteUrl, votes };
           }).sort((a, b) => b.votes - a.votes);
 
           const winner = nominees[0] || null;
@@ -108,14 +114,8 @@ router.get('/download', authenticate, async (req, res) => {
       return { id: String(cat._id), name: cat.name, description: cat.description || '', awards: catAwards };
     }).filter(c => c.awards.length > 0);
 
-    // ── 3. Download all images concurrently ───────────────────────────────
-    const imageEntries = Object.entries(imageMap); // [[localPath, remoteUrl], ...]
-    const imageBuffers = await Promise.all(
-      imageEntries.map(([, url]) => fetchImage(url))
-    );
-
-    // ── 4. Stream ZIP ──────────────────────────────────────────────────────
-    console.log(`[Presentation] categories=${categories.length} awards=${awards.length} slides data=${data.length} images=${imageEntries.length}`);
+    // ── 3. Stream ZIP ─────────────────────────────────────────────────────
+    console.log(`[Presentation] categories=${categories.length} awards=${awards.length} data=${data.length}`);
     data.forEach(c => console.log(`  Category: ${c.name} → ${c.awards.length} awards`));
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', 'attachment; filename="yodeco-awards-presentation.zip"');
@@ -124,14 +124,7 @@ router.get('/download', authenticate, async (req, res) => {
     archive.on('error', err => { console.error('Archive error:', err); });
     archive.pipe(res);
 
-    // Add images
-    imageEntries.forEach(([localPath], i) => {
-      const buf = imageBuffers[i];
-      if (buf) archive.append(buf, { name: localPath });
-    });
-
     // Add presentation.js (data + logic)
-    // JSON.parse(JSON.stringify(...)) strips all Mongoose ObjectIds/Dates to plain values
     const plainData = JSON.parse(JSON.stringify(data));
     archive.append(buildJS(plainData), { name: 'presentation.js' });
 
