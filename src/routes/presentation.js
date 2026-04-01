@@ -90,9 +90,9 @@ router.get('/download', authenticate, async (req, res) => {
     const voteMap = {};
     voteCounts.forEach(v => { voteMap[v._id.toString()] = v.count; });
 
-    // ── 2. Build slide data ────────────────────────────────────────────────
-    // Use remote CDN/S3 URLs directly — skip image bundling to avoid
-    // memory exhaustion from downloading 100+ images concurrently.
+    // ── 2. Build slide data + collect image URLs ──────────────────────────
+    const imageMap = {}; // localPath → remoteUrl
+
     const data = categories.map(cat => {
       const catId = cat._id.toString();
       const catAwards = awards
@@ -104,7 +104,13 @@ router.get('/download', authenticate, async (req, res) => {
           const nominees = (award.nominees || []).map(n => {
             const votes = voteMap[n._id.toString()] || 0;
             const remoteUrl = resolveImageUrl(n.imageUrl);
-            return { id: String(n._id), name: n.name, bio: n.bio || '', localImage: remoteUrl, votes };
+            let localPath = null;
+            if (remoteUrl) {
+              const filename = remoteUrl.split('/').pop().split('?')[0] || `${n._id}.jpg`;
+              localPath = `images/${filename}`;
+              imageMap[localPath] = remoteUrl;
+            }
+            return { id: String(n._id), name: n.name, bio: n.bio || '', localImage: localPath, votes };
           }).sort((a, b) => b.votes - a.votes);
 
           const winner = nominees[0] || null;
@@ -114,9 +120,12 @@ router.get('/download', authenticate, async (req, res) => {
       return { id: String(cat._id), name: cat.name, description: cat.description || '', awards: catAwards };
     }).filter(c => c.awards.length > 0);
 
-    // ── 3. Stream ZIP ─────────────────────────────────────────────────────
-    console.log(`[Presentation] categories=${categories.length} awards=${awards.length} data=${data.length}`);
+    // ── 3. Download images in batches of 5 ────────────────────────────────
+    const imageEntries = Object.entries(imageMap);
+    console.log(`[Presentation] categories=${categories.length} awards=${awards.length} images=${imageEntries.length}`);
     data.forEach(c => console.log(`  Category: ${c.name} → ${c.awards.length} awards`));
+
+    // ── 4. Start ZIP stream immediately, then add images as they download ─
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', 'attachment; filename="yodeco-awards-presentation.zip"');
 
@@ -124,15 +133,21 @@ router.get('/download', authenticate, async (req, res) => {
     archive.on('error', err => { console.error('Archive error:', err); });
     archive.pipe(res);
 
-    // Add presentation.js (data + logic)
+    // Add the text files first (instant)
     const plainData = JSON.parse(JSON.stringify(data));
     archive.append(buildJS(plainData), { name: 'presentation.js' });
-
-    // Add presentation.css
     archive.append(buildCSS(), { name: 'presentation.css' });
-
-    // Add index.html
     archive.append(buildHTML(), { name: 'index.html' });
+
+    // Download images in batches of 5 and append to archive as they arrive
+    const BATCH = 5;
+    for (let i = 0; i < imageEntries.length; i += BATCH) {
+      const batch = imageEntries.slice(i, i + BATCH);
+      const results = await Promise.all(batch.map(([, url]) => fetchImage(url)));
+      batch.forEach(([localPath], j) => {
+        if (results[j]) archive.append(results[j], { name: localPath });
+      });
+    }
 
     await archive.finalize();
 
