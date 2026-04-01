@@ -5,6 +5,7 @@ const fetch = require('node-fetch');
 const { authenticate } = require('../middleware/auth');
 const { Category, Award, Nominee } = require('../models');
 const Vote = require('../models/Vote');
+const mediaService = require('../services/mediaService');
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -29,37 +30,39 @@ function sanitize(obj) {
 async function fetchImage(url) {
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
+    const timer = setTimeout(() => controller.abort(), 8000);
     const res = await fetch(url, { signal: controller.signal });
     clearTimeout(timer);
     if (!res.ok) return null;
-    const buf = await res.buffer();
-    return buf;
+    return await res.buffer();
   } catch {
     return null;
   }
 }
 
-/** Fetch images in small concurrent batches to avoid memory/connection exhaustion */
-async function fetchImagesBatched(entries, batchSize) {
-  const results = new Array(entries.length).fill(null);
-  for (let i = 0; i < entries.length; i += batchSize) {
-    const batch = entries.slice(i, i + batchSize);
-    const buffers = await Promise.all(batch.map(([, url]) => fetchImage(url)));
-    buffers.forEach((buf, j) => { results[i + j] = buf; });
+/** Resolve nominee imageUrl to a direct-fetch URL (presigned S3 or absolute URL) */
+async function resolveImageToBuffer(imageUrl) {
+  if (!imageUrl) return null;
+  try {
+    let fetchUrl;
+    if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+      // Already an absolute URL — fetch directly
+      fetchUrl = imageUrl;
+    } else {
+      // S3 object key — generate presigned URL directly (no HTTP redirect)
+      fetchUrl = await mediaService.generatePresignedDownloadUrl(imageUrl);
+    }
+    return await fetchImage(fetchUrl);
+  } catch {
+    return null;
   }
-  return results;
 }
 
-/** Resolve nominee imageUrl to a full HTTP URL */
-function resolveImageUrl(imageUrl) {
+/** Get a local filename from an imageUrl */
+function imageLocalPath(imageUrl) {
   if (!imageUrl) return null;
-  if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) return imageUrl;
-  // S3 object key — build the media download URL
-  const base = (process.env.FRONTEND_URL || 'http://localhost:3000')
-    .replace('portal.', 'api.')   // portal.yodeco.ng → api.yodeco.ng
-    .replace(':3000', ':5000');
-  return `${base}/api/media/download/${imageUrl}`;
+  const filename = imageUrl.split('/').pop().split('?')[0];
+  return filename ? `images/${filename}` : null;
 }
 
 // ─── route ──────────────────────────────────────────────────────────────────
@@ -90,8 +93,8 @@ router.get('/download', authenticate, async (req, res) => {
     const voteMap = {};
     voteCounts.forEach(v => { voteMap[v._id.toString()] = v.count; });
 
-    // ── 2. Build slide data + collect image URLs ──────────────────────────
-    const imageMap = {}; // localPath → remoteUrl
+    // ── 2. Build slide data + collect image keys ──────────────────────────
+    const imageKeyMap = {}; // localPath → raw imageUrl (S3 key or absolute URL)
 
     const data = categories.map(cat => {
       const catId = cat._id.toString();
@@ -103,12 +106,9 @@ router.get('/download', authenticate, async (req, res) => {
         .map(award => {
           const nominees = (award.nominees || []).map(n => {
             const votes = voteMap[n._id.toString()] || 0;
-            const remoteUrl = resolveImageUrl(n.imageUrl);
-            let localPath = null;
-            if (remoteUrl) {
-              const filename = remoteUrl.split('/').pop().split('?')[0] || `${n._id}.jpg`;
-              localPath = `images/${filename}`;
-              imageMap[localPath] = remoteUrl;
+            const localPath = imageLocalPath(n.imageUrl);
+            if (localPath && n.imageUrl) {
+              imageKeyMap[localPath] = n.imageUrl; // store raw key for presigned URL generation
             }
             return { id: String(n._id), name: n.name, bio: n.bio || '', localImage: localPath, votes };
           }).sort((a, b) => b.votes - a.votes);
@@ -120,12 +120,10 @@ router.get('/download', authenticate, async (req, res) => {
       return { id: String(cat._id), name: cat.name, description: cat.description || '', awards: catAwards };
     }).filter(c => c.awards.length > 0);
 
-    // ── 3. Download images in batches of 5 ────────────────────────────────
-    const imageEntries = Object.entries(imageMap);
+    // ── 3. Start ZIP stream immediately ───────────────────────────────────
+    const imageEntries = Object.entries(imageKeyMap); // [[localPath, imageUrl], ...]
     console.log(`[Presentation] categories=${categories.length} awards=${awards.length} images=${imageEntries.length}`);
-    data.forEach(c => console.log(`  Category: ${c.name} → ${c.awards.length} awards`));
 
-    // ── 4. Start ZIP stream immediately, then add images as they download ─
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', 'attachment; filename="yodeco-awards-presentation.zip"');
 
@@ -133,19 +131,19 @@ router.get('/download', authenticate, async (req, res) => {
     archive.on('error', err => { console.error('Archive error:', err); });
     archive.pipe(res);
 
-    // Add the text files first (instant)
+    // Add text files immediately
     const plainData = JSON.parse(JSON.stringify(data));
     archive.append(buildJS(plainData), { name: 'presentation.js' });
     archive.append(buildCSS(), { name: 'presentation.css' });
     archive.append(buildHTML(), { name: 'index.html' });
 
-    // Download images in batches of 5 and append to archive as they arrive
-    const BATCH = 5;
+    // ── 4. Download images via presigned URLs in batches of 8 ─────────────
+    const BATCH = 8;
     for (let i = 0; i < imageEntries.length; i += BATCH) {
       const batch = imageEntries.slice(i, i + BATCH);
-      const results = await Promise.all(batch.map(([, url]) => fetchImage(url)));
+      const buffers = await Promise.all(batch.map(([, imageUrl]) => resolveImageToBuffer(imageUrl)));
       batch.forEach(([localPath], j) => {
-        if (results[j]) archive.append(results[j], { name: localPath });
+        if (buffers[j]) archive.append(buffers[j], { name: localPath });
       });
     }
 
